@@ -1,0 +1,16 @@
+Changes
+Language/Basic.pm		The main module
+Language/Basic/Common.pm	Methods used by lots of packages (e.g. errors)
+Language/Basic/Expression.pm	Arithmetic, string, and other expressions
+Language/Basic/Function.pm	Intrinsic & user-defined functions
+Language/Basic/Statement.pm	If, Goto, and other sorts of BASIC statements
+Language/Basic/Variable.pm	Numeric and String Scalar and Array Variables
+MANIFEST			This file
+Makefile.PL
+NOTES				Notes on future plans, etc.
+README
+Syntax				Description of understood BASIC syntax
+basic.pl			A BASIC interpreter
+test.bas			A test BASIC program(s) run by test.pl
+test.pl
+wumpus.bas			Gregory Yob's classic Hunt the Wumpus game

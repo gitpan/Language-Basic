@@ -1,0 +1,39 @@
+Language::Basic - A perl module implementation of the BASIC computer language
+
+The included basic.pl is a BASIC interpreter, which uses Language::Basic.
+
+Documentation is included as POD in the .pm files. There's also a syntax
+description in the file Syntax.
+
+WARNING: don't let the RCS version number fool you. This is an ALPHA RELEASE.
+
+--------------------------------------------------------------------------------
+
+Installation should be as simple as
+
+    tar zvxf Language::Basic-*.*.gz
+    perl Makefile.PL
+    make
+    make test (see if it works -- tell me if it doesn't)
+    make install (if you really want to!)
+
+--------------------------------------------------------------------------------
+
+Gregory Yob's classic BASIC adventure game, Hunt the Wumpus, is included for
+your playing pleasure. (The game was apparently written before they invented
+licenses. I hope he doesn't mind my distributing it.)
+
+I invite comments, criticisms, bug reports, bug fixes, and ideas. Also,
+if you've got any fun/interesting BASIC programs lying around that you'd
+like to send me.
+
+Stay tuned. In addition to minor boring upgrades of supported BASIC syntax
+and functionality, (I need to decide how much time I want to waste on this
+completely useless project.) I hope soon to release the results of my secret
+project: an Eldritch Triangle of Interpretive Power!
+
+
+Enjoy!
+
+-Amir Karger
+akarger@cpan.org

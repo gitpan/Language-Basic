@@ -1,0 +1,98 @@
+BASIC GRAMMAR: 
+(Basically, strings mean themselves, [] means optional, and things that
+look like Perl regexps are Perl regexps.)
+
+ Keyword:
+    DATA DIM DEF END FOR GOTO IF INPUT LET NEXT ON PRINT READ REM
+    THEN ELSE TO STEP
+    (Others not yet implemented...)
+
+ Separator
+     , ;
+
+ Arithmetic Expression:
+    Mult. Exp.  Arith. Op.  Mult. Exp.
+    String Exp. + String Exp.
+
+ Arithmetic Operator: + -
+
+ Multiplicative Expression:
+    Unary Exp.  Mult. Op.  Unary Exp.
+
+ Multiplicative Operator: * /
+
+ Unary Expression:
+    - Unary Exp.
+    (Arith. Exp.)
+    Lvalue
+    Constant
+    Function
+
+Lvalue:
+    Variable [ Arglist ]
+
+Variable:
+    Numeric Variable
+    String Variable
+
+Numeric Variable: [A-Z]\w*
+String Variable: [A-Z]\w*\$
+
+Arglist: ( Arith. Exp. [, Arith. Exp. ...] )
+
+Constant:
+    String Constant
+    Numeric Constant
+
+ Numeric Constant: (\d*)?\.?\d+
+ String Constant: ".*?"
+
+ Function: FuncName Arglist
+
+ FuncName: FN[A-Z]\w+
+
+ String Expression:
+    String Constant
+    String Variable
+
+ Conditional Expression:
+    NOT Cond. Exp.					(Not implemented)
+    (Cond. Exp.)					(Not implemented)
+    Cond. Exp.  Cond. Op.  Cond. Exp.			(Not implemented)
+    Arith. Exp.  Rel. Op.  Arith. Exp.
+    String Exp.  Rel. Op.  String Exp.
+
+ Relational Operator: <  <=  >  >=  =  <>    (Note: = can also be in assignment)
+
+ Conditional Operator: AND OR
+
+----------------------------------------------------------------------
+
+Statement:
+    DATA Constant [, Constant...]
+
+    DIM Array(Arglist) [, Array(Arglist...]
+
+    DEF Fname(Variable [,Variable...] ) = Arith. Exp.
+
+    END 
+
+    FOR Lvalue = Arith. Exp. TO Arith. Exp. [STEP Arith. Exp.]
+
+    GOTO Arith. Exp.
+
+    IF Cond. Exp. THEN Statement [ELSE Statement]
+
+    INPUT [String Constant ;] Lvalue [, Lvalue...]
+
+    [LET] Lvalue = Arith. Exp.
+
+    NEXT Lvalue
+
+    ON Arith. Exp. GOTO/GOSUB Arith. Exp. [, Arith. Exp....]
+
+    PRINT [Arith. Exp. [Separator] [ Arith. Exp. [Separator] ...] ]
+
+    READ Lvalue [, Lvalue...]
+
+    REM whatever you want...

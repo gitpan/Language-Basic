@@ -1,0 +1,91 @@
+Major stuff:
+
+I should be able to get rid of the '=' in &lex now, since we always join
+& the find the = by parsing stuff one by one.
+
+Maybe lex can remove all whitespace EXCEPT put spaces around keywords?
+Because we don't want to get LETA=2. Or "2>XTHEN" while parsing an IF. Can we
+do that by just splitting on (".*?" and) whitespace, then 
+    grep {if /^\w+/ {$a=$&; grep {$_ eq $a} @Keywords}} @tokens?
+We could even give each statement its own lex, and run $statement->lex before
+$statement->parse. Then it would only look for the particular keywords in its
+own statement. Or maybe we can get rid of LEX and just have a nexttok sub
+that effectively does the same thing, & cat_until calls nexttok until it
+hits something interesting. In fact, I might even be able to use nexttok
+in parsing, so that I don't eat something before I'm supposed to -- e.g.
+we can't eat a function name when testing it, since it might actually be
+a variable name. We could have an eating & a non-eating nexttok. Might I
+even be able to have nexttok have a local string that it eats from (which
+can be set by set_tok) s.t. we don't have to pass textref around everywhere?
+I guess nexttok would be in LB::Common. We could also make nexttok be
+intelligent, returning EITHER whitespace separated words (where $ counts
+as a word character!), string constants, or tokens like (,;).
+    Note that we may want to parse Input/Data stuff intelligent, e.g. to
+have non-quoted strings. Could we use nexttok with that too?
+    Far in the future, we could even have a cat_until_eos, which looks for
+either : or \n.
+
+I REALLY need more comments! E.g., consolidate (in Foo::new) all possible
+fields for that object's hash.
+
+Note that variable->{"goto_line"} never gets initialized, because Variable::new
+just blesses to Variable::Numeric. Should I have a "refine" subroutine that'll
+set some new stuff?
+
+Case insensitivity in strings? 
+
+Ugly kludge in LB::Expression::Constant::parse. See TODO there.
+
+----------------------------------------------------------------------
+Enhancements to BASIC:
+
+If I want to parse unquoted strings, then I either need to call 
+new LBE::Constant directly, or call Unary with some flag set s.t. we're
+not allowed to interpret the string as a new variable.
+
+If we ever get good enough, we should test that there's no text left
+in a statement when we're done parsing it or there's an error.
+
+I should have an error if we try to assign a string expression to a numeric
+variable. Similarly, there should be a problem if we're parsing & find a
+string expression when we expect a numeric one. And e.g., Arithmetic
+Expression parser should complain if it finds a mix of numeric and
+string expressions.
+
+----------------------------------------------------------------------
+BASIC things to implement for The Secret Project:
+Make sure we can handle a string with value '"'. (Just take ASC(A$)=34?
+or do we need to use \" or something? But then we need to quote \ too!)
+LOAD function of some sort?
+
+----------------------------------------------------------------------
+BASIC things to implement for the betterment of mankind:
+More complicated conditional expressions
+: (i.e. several statements in a line)
+Exponentiation
+More functions: ABS, SQR, string functions, etc.
+GET, GET$
+RESTORE
+NEXT I,J
+float numbers (4.3e-3 et al.), integer & float variables
+correct handling of RND.
+
+----------------------------------------------------------------------
+Things we need like a hole in the head:
+
+- output PERL E.g.:
+sub LB::Statement::If::output_perl {
+    my $self = shift;
+    $str = "IF " .
+	$self->{"expression"}->output_perl .
+	" THEN " .
+	$self->{"then"}->output_perl;
+    if ($self->{"else"}) { $str = "$str ELSE " . $self->{"else"}->output_perl}
+    return $str;
+}
+
+- output BASIC? In theory, that could be useful for debugging. Right now,
+we can't print out lines after we've parsed them.
+
+- An interpreter using Term::Readline where you could actually input stuff
+line by line, load new programs, run them, etc.
