@@ -19,14 +19,9 @@ my $code =<<'ENDCODE';
     150 if i = 2 then gosub 260
     160 c$ = c$ + " "
     170 next i
-    171 for i = 1 to 5
-    172 print
-    173 next i
-    174 print "          ";
+    172 for i = 1 to 5 : print : next i : print "          ";
     180 print c$
-    181 for i = 1 to 5
-    182 print
-    183 next i
+    185 for i = 1 to 5 : print : next i
     190 end
     200 l = 4
     210 return

@@ -1,12 +1,13 @@
 Short term:
 - Allow more complicated conditional expressions
-- STOP command
 
 Medium term:
 
 - LINE INPUT
-- CLS?
-- YETI (needs only LINE INPUT?)
+- Read and write Files (PRINT #...)
+- STOP command
+- CLS/CLEAR? (Curses? Lots of \n's? \e[2J?)
+- YETI (needs only LINE INPUT? Or also file handling?)
 - Basic_Print & Basic_Input subs for output_perl, so that when you translate
   a program into Perl, the I/O is more like BASIC's. (May be Hard, actually.)
 - Upgrade test suite
@@ -18,5 +19,4 @@ Medium term:
 
 Long term:
 
-- colon (multiple statements on a line)
 - output BASIC, debug BASIC code

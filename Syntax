@@ -2,8 +2,11 @@ BASIC GRAMMAR:
 (Basically, strings mean themselves, [] means optional, and things that
 look like Perl regexps are Perl regexps.)
 
+ Comment:
+    REM\s.*
+
  Keyword:
-    DATA DIM DEF END FOR GOTO IF INPUT LET NEXT ON PRINT READ REM
+    DATA DIM DEF END FOR GOSUB GOTO IF INPUT LET NEXT ON PRINT READ RETURN
     THEN ELSE TO STEP
     (Others not yet implemented...)
 
@@ -22,20 +25,24 @@ look like Perl regexps are Perl regexps.)
     - Unary Exp.
     (Arith. Exp.)
     Lvalue
-    Constant
     Function
+    Constant
 
 Lvalue:
-    Variable [ Arglist ]
+    VarName [ Arglist ]
 
-Variable:
-    Numeric Variable
-    String Variable
+VarName:
+    Numeric Identifier
+    String Identifier
 
-Numeric Variable: [A-Z]\w*
-String Variable: [A-Z]\w*\$
+Numeric Identifier: [A-Z]\w*
+String Identifier: [A-Z]\w*\$
 
 Arglist: ( Arith. Exp. [, Arith. Exp. ...] )
+
+Function: FuncName Arglist
+
+FuncName: FN[A-Z]\w+
 
 Constant:
     String Constant
@@ -44,13 +51,9 @@ Constant:
  Numeric Constant: (\d*)?\.?\d+
  String Constant: ".*?"
 
- Function: FuncName Arglist
-
- FuncName: FN[A-Z]\w+
-
  String Expression:
     String Constant
-    String Variable
+    Arithmetic Expression (made of String Exp.s)
 
  Conditional Expression:
     NOT Cond. Exp.					(Not implemented)
@@ -68,12 +71,18 @@ Constant:
 
 ----------------------------------------------------------------------
 
+Line:
+    Number Statements
+
+Statements:
+    Statement [: Statement ...]
+
 Statement:
-    DATA Constant [, Constant...]
+    DATA Constant [, Constant ...]
 
     DIM Array(Arglist) [, Array(Arglist...]
 
-    DEF Fname(Variable [,Variable...] ) = Arith. Exp.
+    DEF Fname(Variable [, Variable ...] ) = Arith. Exp.
 
     END 
 
@@ -81,18 +90,18 @@ Statement:
 
     GOTO Arith. Exp.
 
-    IF Cond. Exp. THEN Statement [ELSE Statement]
+    IF Cond. Exp. THEN Statements [ELSE Statements]
 
-    INPUT [String Constant ;] Lvalue [, Lvalue...]
+    INPUT [String Constant ;] Lvalue [, Lvalue ...]
 
     [LET] Lvalue = Arith. Exp.
 
     NEXT Lvalue
 
-    ON Arith. Exp. GOTO/GOSUB Arith. Exp. [, Arith. Exp....]
+    ON Arith. Exp. GOTO/GOSUB Arith. Exp. [, Arith. Exp. ...]
 
     PRINT [Arith. Exp. [Print Separator] [ Arith. Exp. [Print Separator] ...] ]
 
-    READ Lvalue [, Lvalue...]
+    READ Lvalue [, Lvalue ...]
 
-    REM whatever you want...
+    Comment

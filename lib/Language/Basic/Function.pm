@@ -18,9 +18,6 @@ or a user-defined function, like FNX (defined with the DEF command).
 
 =head1 DESCRIPTION
 
-The define method defines the number and type of the function's arguments,
-as well as what the function actually does.
-
 The check_args method checks that the right number and type of function
 arguments were input.
 
@@ -76,7 +73,7 @@ sub lookup {
     return $Table{$name};
 } # end sub Language::Basic::Variable::lookup
 
-# Check argument number and type
+# Check argument number and type. Exit_Error if there's a problem.
 sub check_args {
     my ($self, $arglist) = @_;
     my @args = @{$arglist->{"arguments"}};
@@ -109,7 +106,7 @@ sub check_args {
 	}
     }
     chomp($error); # Exit_Error will add last \n back in.
-    return $error;
+    Exit_Error($error) if $error;
 } # end sub Language::Basic::Variable::check_args
 
 =head2
@@ -191,6 +188,7 @@ sub initialize {
 		'    : substr($str, $index) );') 
 	    . "\n}" 
 	],
+	['STR$', "N", sub {'' . shift;}, "{'' . shift;}"],
     );
 
     # Initialize intrinsic functions
@@ -224,7 +222,7 @@ sub evaluate {
 # output the function name
 sub output_perl {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
 
     # If it's a basic function that translates to an intrinsic function,
     # just return the function
@@ -254,8 +252,15 @@ package Language::Basic::Function::Intrinsic::Numeric;
 } # end package Language::Basic::Function::Intrinsic
 
 ######################################################################
-# package Language::Basic::Function::Defined
-# User-defined functions
+
+=head2
+
+Class Language::Basic::Function::Defined
+
+This class handles functions defined by the user in DEF statements.
+
+=cut
+
 #
 # Fields:
 #     variables - the function parameters. (LB::Variable::Scalar objects)
@@ -267,13 +272,13 @@ package Language::Basic::Function::Defined;
 @Language::Basic::Function::Defined::ISA = qw(Language::Basic::Function);
 use Language::Basic::Common;
 
-# This sub defines a function, i.e. says what it does with its arguments
-sub define {
+# This sub declares a function, i.e. says how many arguments it has
+sub declare {
     # $arglist is a ref to a list of LB::Variable::Lvalues, which are the
     # arguments to the Function. (E.g., X in DEF FN(X))
     # $exp is an LB::Expression which, when evaluated on the arguments,
     # will implement the function
-    my ($self, $arglistref, $exp) = @_;
+    my ($self, $arglistref) = @_;
     my $types; # Each arg is S (String) or N (Numeric)
 
     foreach my $arg (@$arglistref) {
@@ -283,8 +288,14 @@ sub define {
     $self->{"arg_types"} = $types;
 
     $self->{"arguments"} = $arglistref;
-    $self->{"expression"} = $exp;
 } # end sub Language::Basic::Function::Defined::define
+
+# This sub defines a function, i.e. says what it does with its arguments
+# Just involves setting the function's "expression" field.
+sub define {
+    my ($self, $exp) = @_;
+    $self->{"expression"} = $exp;
+}
 
 # Actually evaluate the function on its arguments
 # Set each parameter (in "variables" field) to the value given in the
@@ -295,6 +306,7 @@ sub define {
 sub evaluate {
     # Note that number & type of args has already been checked
     my ($self, @args) = @_;
+    Exit_Error("Function is not defined!") unless defined $self->{"expression"};
 
     my @save_vars;
     foreach (@{$self->{"arguments"}}) {

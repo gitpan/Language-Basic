@@ -60,13 +60,14 @@ require Exporter;
 );
 
 # Stolen from `man perlmod`
-$VERSION = do { my @r = (q$Revision: 1.35 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.43 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 # Sub-packages
 use Language::Basic::Common;
 use Language::Basic::Expression;
 use Language::Basic::Function;
 use Language::Basic::Statement;
+use Language::Basic::Token;
 use Language::Basic::Variable;
 
 # sub-packages
@@ -96,11 +97,10 @@ use Language::Basic::Common;
 
 # Fields:
 # lines		Keys are line numbers, values are LB::Line objects
-# curr_line	Current line number in the program
-# next_line	The line we're going to implement after this one
-# first_line	First line in the program
-# stack		The subroutine stack. In BASIC, it's just a list of line 
-# 		numbers we came from.
+# curr_line	LB::Line currently being implemented/parsed/whatever
+# end_program	Done implementing the program?
+# stack		The subroutine stack. In BASIC, it's just a list of
+# 		statements we GOSUB'ed from.
 # data		The data holder (stuff from DATA statements, read by READ)
 # parsed	Has this Program been parsed since the last time 
 #		new lines were added?
@@ -116,10 +116,10 @@ sub new {
 
     my $in = {
 	"lines" => {},
-        "cur_line" => undef,
-        "next_line" => undef,
-        "first_line" => undef,
+        "curr_line" => undef,
+	"end_program" => 0,
         'stack' => [],
+	"for_statements" => {},
         'data' => [],
         'parsed' => 0,
 	"needed_subs" => {},
@@ -128,35 +128,73 @@ sub new {
     bless $in, $class;
 } # end sub Language::Basic::Program::new
 
-=item Current_Program
+=item current_program
 
 Returns the program currently being parsed/implemented/whatever
 
-=item Set_Current_Program
+=item set_current_program
 
 Sets arg0 to be the Current Program
 
 =cut
 
-my $_Current_Program;
-sub Current_Program {
+my $_Current_Program; # Gasp! It's an Evil Global Variable!
+sub current_program {
     return $_Current_Program;
 }
-sub Set_Current_Program {
-    my $self = shift or die "LBP::Set_Current_Program must have argument!\n";
+sub set_current_program {
+    my $self = shift or die "LBP::set_current_program must have argument!\n";
     $_Current_Program = $self;
+}
+
+=item current_line
+
+Returns the LB::line currently being parsed/implemented/whatever
+
+=item set_current_line
+
+Sets the current line in Program arg0 to be line I<number> arg1
+
+=item first_line_number
+
+Returns (not surprisingly) the first line number in Program arg0
+
+=cut
+
+sub current_line { return shift->{"curr_line"}; }
+sub set_current_line {
+    my $prog = shift; 
+    my $num = shift;
+    if (defined $num && exists $prog->{"lines"}->{$num}) {
+	$prog->{"curr_line"} = $prog->{"lines"}->{$num};
+    } else {
+        $prog->{"curr_line"} = undef;
+    }
+}
+sub first_line_number {return (sort {$a <=> $b} keys %{shift->{"lines"}})[0]; }
+
+=item current_line_number
+
+What line number in Program arg0 are we currently on?
+
+=cut
+
+sub current_line_number {
+    my $prog = shift;
+    my $line = $prog->current_line;
+    return (defined $line ? $line->line_number : undef);
 }
 
 =item input
 
-This method reads in a program from a file. It doesn't do any parsing,
-except for taking the line number out of the line.
+This method reads in a program from a file, whose name is the string arg0. It
+doesn't do any parsing, except for taking the line number out of the line.
 
 =cut
 
 sub input {
     my ($self, $filename) = @_;
-    $self->Set_Current_Program;
+    $self->set_current_program;
     my $fh = new IO::File $filename;
     die "Error opening $filename: $!\n" unless defined $fh;
     my $old_num = -1;
@@ -198,7 +236,7 @@ except for taking the line number out of the line.
 
 sub line {
     my $self = shift;
-    $self->Set_Current_Program;
+    $self->set_current_program;
     my $line = shift; # sans \n
 
     defined $self->_add_line($line) or die "Missing line number in line()!\n";
@@ -220,7 +258,7 @@ sub _add_line {
     my $line_num = $1;
 
     # Create an LB::Line with what's left of the line
-    $self->{'lines'}{$line_num} = new Language::Basic::Line $line;
+    $self->{'lines'}{$line_num} = new Language::Basic::Line($line, $line_num);
 
     return $line_num;
 } # end sub Language::Basic::Program::_add_line
@@ -237,8 +275,6 @@ sub _fix_lines {
     } 
 
     $self->{'lines'}{ $line_numbers[-1] }->set_next( undef );
-
-    $self->{'first_line'} = $line_numbers[0];
 } # end sub Language::Basic::Program::_fix_lines 
 
 =item parse
@@ -249,21 +285,18 @@ in the program and parsing each line.
 =cut
 
 sub parse {
-# This function takes lines of the program and "orders" them,
-# then parses each one.
     my $self = shift;
-    $self->Set_Current_Program;
+    $self->set_current_program;
 
     return if $self->{'parsed'};
 
-    $self->{'curr_line'} = $self->{'first_line'};
+    $self->set_current_line($self->first_line_number);
 
-    # Loop through the lines in the program
-    while (defined $self->{'curr_line'}) {
-        my $line = $self->{"lines"}->{ $self->{'curr_line'} };
-	
+    # Loop through the lines in the program, parse each
+    while (defined (my $line = $self->current_line)) {
+	#print $line->line_number," ",$line->{"text"},"\n";
 	$line->parse;
-	$self->{'curr_line'} = $line->get_next;
+	$self->set_current_line($line->get_next);
     }
 
     $self->{'parsed'} = 1;
@@ -272,42 +305,82 @@ sub parse {
 =item implement
 
 This method actually runs the program. That is, it starts on the first line,
-and implements lines one at a time, following line numbers in numerical
-order unless a GOTO, NEXT, etc. sends it somewhere else. It stops when it
-hits an END statement or "falls off" the end of the program.
+and implements statements one at a time. It performs the statements on a
+line in order, and goes from line to line in numerical order, unless a GOTO,
+NEXT, etc. sends it somewhere else. It stops when it hits an END statement or
+"falls off" the end of the program.
 
 =cut
 
 sub implement {
     my $self = shift;
-    $self->Set_Current_Program;
+    $self->set_current_program;
     # In case you're lazy & call implement w/out parsing first
     $self->parse unless $self->{'parsed'};
 
     # Zero stack, etc., start at beginning of program
     $self->start;
+    # Mini-kludge to get the program running
+    $self->goto_line($self->current_line_number);
 
-    # Loop over lines while there are lines
-    # curr_line will be undef for END statements or when you "fall off" the
-    # end of the program
-    while (defined $self->{'curr_line'}) {
+    # Loop over statements while there are statements
+    while (defined(my $curr_statement = $self->increment)) {
+
 	# TODO create a "trace" command that prints out line numbers
 	# for debugging
-	#print "Line ",$self->{"curr_line"},"\n";
-        my $line = $self->{"lines"}->{ $self->{'curr_line'} };
-	
-	# By default, go on to next line in numerical order after this one
-	# (self->{'next_line'} may be changed while implementing the line!)
-	$self->{'next_line'} = $line->get_next;
+	#my $line = $self->current_line;
+	#print $line->line_number," ",$line->{"text"},"\n";
 
-	# Implement the line!
-	$line->implement;
-	
-	# Advance!
-	$self->{'curr_line'} = $self->{'next_line'};
+	# Do the statement!
+	# Hooray for OO; just call "implement" on everything!
+	#print "Statement class ",ref($curr_statement),"\n";
+	# Note that this may well change where the next &increment will go
+	$curr_statement->implement;
     }
 
+    #Done!
+    # TODO Exit more gracefully?
 } # end sub Language::Basic::Program::implement
+
+# Return the next Statement we're supposed to execute, based on the Program's
+# next_statement field. And set the default action for the subsequent call
+# to increment, which is to do the next Statement in order. (Or return
+# undef if the program is done.)
+#
+# In the simplest case, next_statement will just be the Statement after the
+# current one on the current Line, although it my well be in a totally
+# different place due to GOTOs, RETURNs, ELSEs or other interesting programming
+# tools.
+#
+# If next_statement is undefined, we're done with this line (and haven't been
+# directed to go somewhere more interesting), so go to the next line in order.
+#
+# TODO should this method be podded?
+sub increment {
+    my $self = shift;
+
+    my $next;
+    unless (defined($next = $self->{"next_statement"})) {
+	# Program is at the end of a line
+	my $line = $self->current_line;
+	my $number = $line->get_next;
+
+	# goto_line will set Program's next_statement
+	# ($number = undef will set "end_program")
+	$self->goto_line($number);
+	$next = $self->{"next_statement"};
+    }
+    # Did we hit an END or "fall off" the last line of the program?
+    return undef if $self->{"end_program"};
+
+    # By default, we're going to go on to the next statement after this one
+    $self->{"next_statement"} = $next->{"next_statement"};
+
+    # Whether or not we were at end of line, we now know what next
+    # Statement is, so return it.
+    return $next;
+
+}
 
 =item start
 
@@ -322,44 +395,126 @@ It should be called any time we start going through the program.
 sub start {
     my $self = shift;
     $self->{"stack"} = [];
+    $self->{"for_statements"} = {};
     $self->{"column"} = 0;
 
     # Start on the first line of the program
-    $self->{'curr_line'} = $self->{'first_line'};
+    $self->set_current_line($self->first_line_number);
 } # end sub Language::Basic::Program::start
 
-=item line_number
+=item goto_line
 
-What line are we currently on?
+Continue Program execution at the first Statement on line number arg1. 
 
 =cut
 
-sub line_number { return shift->{"curr_line"}; }
+sub goto_line {
+    my $self = shift;
+    my $next_line = shift;
+
+    if (defined $next_line) {
+	$self->set_current_line($next_line);
+        my $line = $self->current_line or
+	    Exit_Error("Can't find line $next_line!");
+	$self->{"next_statement"} = $line->{"first_statement"};
+    } else {
+        $self->{"end_program"} = 1;
+    }
+
+} # end sub Language::Basic::Program::set_next_line
+
+=item goto_after_statement
+
+Kind of like goto_line, except go to the Statement I<after> Statement arg1.
+(Or the first statement on the line just after Statement arg1, if it's the last
+Statement on its line.) E.g., when you RETURN from a GOSUB, you want to return
+to the GOSUB line but start execution after the GOSUB. Same with FOR.
+
+=cut
+
+sub goto_after_statement {
+    my $self = shift;
+    my $st = shift;
+    $self->{"next_statement"} = $st;
+    # May have jumped to (the beginning or middle of) a new line,
+    # so we have to reset this. (It stays the same if we're jumping w/in
+    # one line, but that's OK.)
+    $self->set_current_line($st->{"line_number"});
+
+    # Goto the statement, and set Program's next_statement field, so
+    # that when Program::implement calls increment, it goes to the
+    # statement *after* this one.
+    $self->increment;
+
+} # end sub Language::Basic::Program::goto_after_statement
+
+=pod
+
+=back
+
+The following methods are called from LB::Statement parse or implement
+methods to implement various BASIC commands.
+
+=over 4
 
 =item push_stack
 
-"Call a subroutine", i.e. push the current line number onto the Program's
-calling stack
+(GOSUB) Call a subroutine, i.e. push the current Statement::Gosub onto the
+Program's calling stack
+
+=item pop_stack
+
+(RETURN) Return from a subroutine, i.e., pop the top Statement::Gosub off of
+the Program's calling stack
 
 =cut
 
 sub push_stack {
     my $self = shift;
-    my $num = $self->line_number;
-    push @{ $self->{'stack'} }, $num;
+    my $st = shift;
+    push @{ $self->{'stack'} }, $st;
 }
 
-# "Return from a subroutine", i.e. pop the last calling line number 
-# from the calling stack
 sub pop_stack {
     my $self = shift;
     return pop @{ $self->{'stack'} };
 }
 
+=item store_for
+
+(FOR) Store a Statement::For arg1, so that when we get to the corresponding
+Statement::Next, we know where to go back to
+
+=item pop_stack
+
+(NEXT) Get the Statement::For corresponding to Statement::Next arg1
+
+=cut
+
+sub store_for {
+    my $self = shift;
+    my $for_statement = shift;
+    my $lvalue = $for_statement->{"lvalue"};
+    my $name = $lvalue->{"name"};
+    $self->{"for_statements"}->{$name} = $for_statement;
+} # end sub Language::Basic::Program::store_for
+
+sub get_for {
+    my $self = shift;
+    my $next_statement = shift;
+    my $lvalue = $next_statement->{"lvalue"};
+    my $name = $lvalue->{"name"};
+    if (exists $self->{"for_statements"}->{$name}) {
+        return $self->{"for_statements"}->{$name};
+    } else {
+	Exit_Error("NEXT $name without FOR!");
+    }
+} # end sub Language::Basic::Program::get_for
+
 =item add_data
 
-Add a piece of data to the Program's data storage, to be accessed
-later. (i.e. parsing a DATA statement)
+(DATA) Add a piece of data to the Program's data storage, to be accessed
+later.
 
 =cut
 
@@ -371,8 +526,7 @@ sub add_data {
 
 =item get_data
 
-Get a piece of data that was stored earlier. (i.e. implementing a READ
-statement)
+(READ) Get a piece of data that was stored earlier. 
 
 =cut
 
@@ -383,41 +537,32 @@ sub get_data {
     return $thing;
 }
 
-=item set_next_line
+=pod
 
-Which line number do we move to after doing the current line?
+=back
+
+Finally, there are methods for translating a Program to Perl.
+
+=over 4
+
+=item output_perl
+
+This method translates a program to Perl and outputs it. It does so by
+looping through the Lines of the program in order, and calling output_perl on
+each one.  It also prints some pre- and post- data, such as any subroutines it
+needs to declare (e.g., subs that imitate BASIC functionality, as well as subs
+that correspond to BASIC DEF statements).
+
+It attempts to print everything out nicely, with added whitespace et al.  to
+make the code somewhat readable.  (Note that all of the subpackages'
+output_perl methods I<return> strings rather than printing them, so we can
+handle all of the printing, indenting, etc. here.)
 
 =cut
-
-sub set_next_line {
-    my $self = shift;
-    my $next_line = shift;
-    $self->{'next_line'} = $next_line;
-    
-    Exit_Error("Can't find line $next_line!") 
-	if defined $next_line and not defined $self->{'lines'}{ $next_line };
-} # end sub Language::Basic::Program::set_next_line
-
-=item set_after_next_line
-
-Just like set_next_line, except go the line *after* that line.
-E.g., RETURN from a GOSUB, you want to return to the GOSUB line
-but start execution after that line. Same with FOR.
-
-=cut
-
-sub set_after_next_line {
-    my $self = shift;
-    my $next_line = shift;
-    my $next_obj  = $self->{'lines'}{ $next_line };
-    $next_line = $next_obj->get_next if defined $next_obj;
-    $self->set_next_line($next_line);
-} # end sub Language::Basic::Program::set_after_next_line
 
 sub output_perl {
-# This function takes lines of the program and outputs each as perl
     my $self = shift;
-    $self->Set_Current_Program;
+    $self->set_current_program;
     # In case you're lazy & call implement w/out parsing first
     $self->parse unless $self->{'parsed'};
 
@@ -428,6 +573,7 @@ sub output_perl {
     my $Output_Indent = 2; # eight spaces by default
 
     # Beginning of the program
+    # TODO should basic2pl do these two lines?
     print '#!/usr/bin/perl -w';
     print "\n#Translated from BASIC by basic2pl\n\n";
 
@@ -442,10 +588,9 @@ sub output_perl {
 
     # Loop through the lines in the program
     print "$sep\n# Main program\n#\n";
-    while (defined $self->{'curr_line'}) {
-	my $line_num = $self->{"curr_line"};
+    while (defined (my $line = $self->current_line)) {
+	my $line_num = $line->line_number;
 	#warn "Line $line_num\n";
-        my $line = $self->{"lines"}->{ $self->{'curr_line'} };
 	my $label = "L$line_num:";
 
 	# What's the line?
@@ -462,6 +607,7 @@ sub output_perl {
 
 	    # If we didn't hit an indent-changing command, print the
 	    # label (if any) and the actual string
+	    # TODO only print out the labels we have to!
 	    $label = (s/^A?L\d+:// ? $& : "");
 	    # minus for left justify
 	    my $indent = -$Output_Indent * $spaces_per_indent; 
@@ -473,15 +619,31 @@ sub output_perl {
 	}
 
 	# Go through lines in order
-	$self->{'curr_line'} = $line->get_next;
+	$self->set_current_line($line->get_next);
     }
 
+    # TODO why not indent these nicely?
     my $n = $self->{"needed_subs"};
     print "\n$sep\n# Subroutine Definitions\n#\n" if %$n;
     # Print out required subroutines
     foreach (sort keys %$n) {
-        print (join(" ", "sub", $_, $n->{$_}));
-	print " # end sub $_\n\n";
+        my $out = join(" ", "sub", $_, $n->{$_}, "# end sub $_\n\n");
+	$Output_Indent = 0;
+
+	foreach (split (/\n/, $out, -1)) {
+	    # Change indenting for next time?
+	    $Output_Indent += 1, next if $_ eq "INDENT";
+	    $Output_Indent -= 1, next if $_ eq "UNINDENT";
+	    warn "weird indenting $Output_Indent\n" if $Output_Indent < 0;
+
+	    # If we didn't hit an indent-changing command, print the string
+	    my $indent = $Output_Indent * $spaces_per_indent; 
+	    print " " x $indent;
+
+	    # print the actual string
+	    print $_;
+	    print "\n"; # the \n we lost from split, or the last \n
+	}
     }
 
     # If there were any DATA statements...
@@ -520,6 +682,10 @@ sub need_sub {
 This class handles one line of a BASIC program, which has one or more
 Statements on it.
 
+This class has no implement method. The reason is that sometimes, you'll
+jump to the middle of a line. (E.g., returning from the GOSUBs in
+10 FOR A=1 TO 10: GOSUB 1000: NEXT A)
+
 Methods:
 
 =over 4
@@ -528,11 +694,13 @@ Methods:
 
 {
 package Language::Basic::Line;
+use Language::Basic::Common;
 
 # Make a new LB::Line with the text given (don't parse it yet)
 sub new {
     my $class = shift;
     my $text = shift;
+    my $line_number = shift;
     my $in = {
 	# literal text of the line (not including line number)
 	"text" => $text,
@@ -540,9 +708,19 @@ sub new {
 	"first_statement" => 0,
 	# number of next line (accessed with set/get_next)
 	'next_line' => undef,
+	# BASIC line number of this Line
+	"line_number" => $line_number,
     };
     bless $in, $class;
 } # end sub Language::Basic::Line::new
+
+=item get_next
+
+Returns the Line's line number
+
+=cut
+
+sub line_number { shift->{"line_number"} }
 
 =item get_next
 
@@ -556,6 +734,7 @@ Sets the next line number in the Program to be arg1.
 
 sub get_next { return shift->{'next_line'}; }
 
+# TODO Should this be _set_next and undocumented? Only gets called by _fix_lines
 sub set_next {
     my $self = shift;
     my $next = shift;
@@ -565,90 +744,72 @@ sub set_next {
 
 =item parse
 
-This method breaks the line up into tokens (and removes whitespace, except in
-strings), then parses the first statement on the line. (Eventually, it
-will parse all statements on the line, but colons aren't currently supported.)
+This method breaks the line up into Statements (and removes whitespace, except
+in strings), then parses the Statements in order.
 
 =cut
 
 sub parse {
     my $self = shift;
-    my @tokens = $self->lex;
 
-    # Create the new Statement and figure out what kind of statement it is.
-    # $statement will be an object of a subclass LB::Statement::*)
-    my $statement = new Language::Basic::Statement \@tokens;
-    $self->{"first_statement"} = $statement;
+    # Break the line up into Tokens for later eating/parsing
+    my $token_group = new Language::Basic::Token::Group;
+    $token_group->lex($self->{"text"});
+    my $oldst;
 
-    # TODO parse multiple statements on one line!
-    # Parse the statement, depending on what subclass it is.
-    $statement->parse;
-}
+    # Parse Statement(s) in the Line
+    do {
+	# Create the new Statement and figure out what kind of statement it
+	# is.  $statement will be an object of a subclass LB::Statement::*)
+	my $statement = new Language::Basic::Statement $token_group;
 
-=item lex
+	# Actually parse the Statement
+	$statement->parse($token_group);
 
-This method breaks the line up into tokens. Currently that means it
-separates by whitespace (which is discarded) and equals signs. (The = split
-isn't necessary but it's convenient.) Anything in double quotation marks is its
-own token, and no splitting is done within it.
+	# Each statement needs to know which line it's on, in case we
+	# RETURN or NEXT into the middle of a line.
+	$statement->set_line_number($self->{"line_number"});
 
-=cut
-
-# TODO if we're smart about reading expressions, we won't need whitespace
-# around, e.g., "TO" in FOR statements.
-sub lex {
-    my $self = shift;
-    my $text = $self->{"text"};
-    # Separate string constants from everything else
-    my @pieces = split(/(".*?")/, $text);
-    my @tokens = map {
-	if (/^"/) {
-	    $_;
+	# Create a linked list of the Statements in the line
+        if (defined $oldst) {
+	    $oldst->{"next_statement"} = $statement
 	} else {
-	    # Get rid of whitespace, and upcase everything but strings
-	    map {uc} split;
+	    $self->{"first_statement"} = $statement;
 	}
-    } @pieces;
+	$oldst = $statement;
 
-    #print ("Tokens are '",join("', '",@tokens),"'\n");
-    return @tokens;
+    # If there's a colon, eat it and parse the next Statement on the Line
+    } while ($token_group->eat_if_class("Statement_End"));
+
+    # TODO make this error prettier
+    if ($token_group->stuff_left) {
+        my $p = "Extra tokens left after parsing!\n" . $token_group->print;
+	chomp($p);
+	Exit_Error($p);
+    }
 }
 
-=item implement
+=item output_perl
 
-This method actually executes the line. That is, it starts with the first
-statement on the line, and performs it. If there's another statement to
-implement on this line (e.g., an IF/THEN, or multiple statements
-separated by colons (when that's supported)) then LB::Statement::implement
-returns that Statement, which in turn is implemented.
+This method simply calls output_perl on each of the Line's Statements in
+order.
 
 =back
 
 =cut
 
-sub implement {
-    my $self = shift;
-    #print "$Language::Basic::Program::Counter ", $self->{"text"},"\n";
-    my $curr_statement = $self->{"first_statement"};
-
-    # If there's more than one statement on the line, we have to do them
-    # all. Statement::implement will return 0 if there aren't any more.
-    while ($curr_statement) {
-	#print "Statement class ",ref($curr_statement),"\n";
-	# Hooray for OO; just call "implement" on everything!
-	# implement should return non-zero if there's another statement
-	# on this line.
-	$curr_statement = $curr_statement->implement;
-    }
-} # end sub Language::Basic::Line::implement
-
 sub output_perl {
     my $self = shift;
     my $statement = $self->{"first_statement"};
-    # TODO loop over statements in the line?
+    my $out = $statement->output_perl;
+    # Do each statement in the line in order
+    # Put each statement on a separate line.
+    while (defined ($statement = $statement->{"next_statement"})) {
+	$out .= "\n";
+	$out .= $statement->output_perl;
+    }
 
     # Output the statement
-    my $out = $statement->output_perl;
     return $out;
 } # end sub Language::Basic::Line::output_perl
 
@@ -745,7 +906,14 @@ READ A, B(I), C$. Reads data from DATA statements into variables
 
 =item REM
 
-REM WHATEVER. Anything after the REM is ignored.
+REM WHATEVER. Anything after the REM is ignored (including colons and
+succeeding statements!)
+
+=item RETURN
+
+RETURN. Return to the statement after the last GOSUB.
+
+=back
 
 =head2 Intrinsic functions
 
@@ -756,13 +924,19 @@ LEN (length), VAL (turn a string into a number; in Perl you just + 0 :))
 
 RND just calls Perl's rand; you can't seed it or anything.
 
-String functions: CHR$, MID$
-
-=back
+String functions: CHR$, MID$, STR$
 
 =head2 Overall Coding Issues
 
 =over 4
+
+=item *
+
+Multiple statements can appear on one line, separated by colons. E.g.:
+10 FOR I = 1 TO 10: PRINT I: NEXT I, or 20 FOR A = 1 TO 4: GOSUB 3000: NEXT A.
+Note that after a THEN, all statements are considered part of the THEN,
+until a statement starting with ELSE, after which all remaining statements are
+part of the ELSE.
 
 =item * 
 

@@ -14,8 +14,8 @@ use Exporter ();
 
 sub Exit_Error {
     my $err = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
-    my $error_line = $prog->{"curr_line"};
+    my $prog = &Language::Basic::Program::current_program;
+    my $error_line = $prog->current_line_number;
 
     STDOUT->flush; # in case we're in the middle of a PRINT statement...
     warn "\nError in line $error_line: $err\n";

@@ -17,8 +17,9 @@ works. This pod page is more technical.
 A Statement is something like 'GOTO 20' or 'PRINT "HELLO"'. A line of
 BASIC code is made up of one or more Statements.
 
-    # Create the statement & bless it to an LBS::* subclass
-    my $statement = new Language::Basic::Statement \("GOTO 20");
+    # Create the statement from an LB::Token::Group and
+    # bless it to an LBS::* subclass
+    my $statement = new Language::Basic::Statement $token_group;
     $statement->parse; # Parse the statement
     $statement->implement; # Implement the statement
 
@@ -43,20 +44,23 @@ LB::Statement::Then! Instead the "then" field of the LB::Statement::If
 object will point to another statement. In the above program, it would
 point to a LB::Statement::Goto.)
 
-Parsing a line of BASIC starts with removing the line number. After that,
-LB::Statement::new is called with a ref to the text on the line.
+Parsing a line of BASIC starts with removing the line number and lexing
+the line, breaking it into Tokens which are held in an LB::Token::Group.
+LB::Statement::new, refine, and parse, are all called with a Token::Group
+argument. These methods gradually "eat" their way through the Tokens.
 
 LBS::new simply creates an LBS object. However, it then calls LBS::refine,
-which looks at the first word of the command and blesses the object to
+which looks at the first Token of the command and blesses the object to
 the correct LBS::* subclass.
 
 Each LBS subclass then has (at least) the methods parse, implement,
 and output_perl.
 
 The parse method goes through the text and digests it and sets various
-fields in the object.  The implement method uses the fields to
-implement the BASIC command.  The output_perl method returns a string
-(with ; but not \n at the end) of the Perl equivalent of the BASIC statement.
+fields in the object, which are used by implement and output_perl.  The
+implement method actually implements the BASIC command.  The
+output_perl method returns a string (with ; but not \n at the end) of the Perl
+equivalent of the BASIC statement.
 
 =cut
 
@@ -88,9 +92,8 @@ package Language::Basic::Statement::Return;
 # depending on what sort of statement it is. The refined object is returned.
 #
 # Fields:
-#     tokens - array of tokens (chars, words, etc.) in this statement
-#          Note that this is a temporary array. It gets eaten during parsing.
-#     next_statement - reference to next Statment on this Line. (or 0)
+#     next_statement - reference to next Statment on this Line. (or undef)
+#          Note that next doesn't point to an If's Then/Else sub-statements
 #
 #     lvalue - an LB::Expression::Lvalue object, which represents an
 #          expression like X or AR(3+Q), which can be on the left hand
@@ -99,15 +102,15 @@ package Language::Basic::Statement::Return;
 #          Conditional.) Sometimes there are multiple expressions.
 sub new {
     my $class = shift;
-    my $tokref = shift;
-    my $parsing_if = shift;
+    my $token_group = shift;
+    my $line_num_ok = shift;
     my $self = {
-	"tokens" => $tokref,
-	"next_statement" => 0,
+	"next_statement" => undef,
+	"line_number" => undef,
     };
 
     bless $self, $class;
-    $self->refine( $parsing_if );
+    $self->refine( $token_group, $line_num_ok );
 } # end sub Language::Basic::Statement::new
 
 # Refine LB::Statement to the correct subclass
@@ -115,36 +118,47 @@ sub new {
 # Statement to be a new subclass
 sub refine {
     my $self = shift;
-    my $parsing_if = shift;
-    die "LBS::refine called with weird arg $parsing_if" if
-        defined $parsing_if && $parsing_if ne "parsing_if";
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
+    my $line_num_ok = shift;
+    die "LBS::refine called with weird arg $line_num_ok" if
+        defined $line_num_ok && $line_num_ok ne "line_num_ok";
 
     # Valid BASIC statements
-    use constant KEYWORDS => qw(DATA DEF DIM END FOR GOSUB GOTO IF INPUT 
+    use constant KEYWORDS => 
+            qw(DATA DEF DIM END FOR GOSUB GOTO IF INPUT 
 	    LET NEXT ON PRINT READ REM RETURN);
-    my %keywords = map {$_, 1} (KEYWORDS);
+    # TODO In theory, this would let us make STOP exactly synonymous
+    # with END, or CLEAR synonymous with CLS, etc.
+    my %keywords = map {$_, ucfirst(lc($_))} (KEYWORDS);
 
     # First word is a command, or a variable (implied LET statment)
-    my $text = $tokref->[0];
+    my $tok = $token_group->lookahead;
+    Exit_Error("Empty statement?!") unless defined $tok;
     my $command;
-    if ($keywords{$text}) {
-	# Remove the command from the token list
-        shift @{$tokref};
-	$command = $text;
+    (my $class = ref($tok)) =~ s/^Language::Basic::Token:://;
+    if ($class eq "Keyword") {
+	my $text = $tok->text;
+	if (exists $keywords{$text}) {
+	    $token_group->eat;
+	    $command = $keywords{$text};
+	} else {
+	    # Statement started with, e.g., "TO" or "ELSE"
+	    Exit_Error("Illegal reserved word '$text' at start of statement");
+	}
 
-    # Note this isn't a perfect test, since there could be garbage on a line
-    # as long as the line has an = somewhere. But we can't test for ^=
-    # because it might be an array or something
-    } elsif ($text =~ /^[A-Z]\w*\$?/ and (join '', @$tokref) =~ /=/) {
-        $command = "LET";
+    } elsif ($class eq "Comment") {
+        $command = "Rem";
+    } elsif ($class eq "Identifier") {
+        $command = "Let";
     # If we're in a THEN or ELSE, a line number means GOTO that line
-    } elsif ($parsing_if && $text =~ /^\d+$/) {
-        $command = "GOTO";
+    } elsif ($line_num_ok && 
+            $class eq "Numeric_Constant" &&
+            $tok->text =~ /^\d+$/) {
+        $command = "Goto";
     } else {
-        Exit_Error("Syntax Error: No Keyword or Variable found!");
+        Exit_Error("Syntax Error: No Keyword or Identifier at start of statement!");
     }
-    my $subclass = "Language::Basic::Statement::" . ucfirst(lc($command));
+    my $subclass = "Language::Basic::Statement::" . $command;
     #print "New $subclass Statement\n";
 
     bless $self, $subclass;
@@ -154,57 +168,17 @@ sub refine {
 sub parse { }
 
 # By default, implementing does nothing. Useful, e.g., for REM
-sub implement {
-    return shift->{"next_statement"};
-}
+sub implement { }
 
 # By default, output an empty statement. Note that you need the semicolon,
 # because we write a line label for each line.
 sub output_perl {return ";";}
 
-# Concatenate tokens until you get to a splitting char.
-# Input: LB::Statement object, and "regexp" ("=" or "[,;]" to split on.
-# Output: Two strings. First is the catted tokens until the matching string,
-# second is the matching string.
-# The search pattern will have '^' before it. Anything left in a pattern
-# after the match will be left in the tokarray.
-# (Note that object's token array gets (partially or fully) eaten.)
-sub cat_until_match {
-    my ($self, $matcher) = @_;
-    my $tokref = $self->{"tokens"};
-    
-    #print "looking for '$matcher' in '" . (join '', @$tokref) . "'\n";
-    # String constants always come in their own token.
-    my $total = "";
-    my $match = undef;
-    while (defined (my $tok = shift @$tokref)) {
-	#print "tok is '$tok'\n";
-
-	# Watch out for ;, in string constants!
-        if ($tok !~ /^"/) {
-	    # Copy up through what we're looking for
-	    # TODO this won't work once we have multidimensional arrays!
-	    # Note: we can't just use $3, etc because $matcher might have
-	    # parens; also, we can't use $` $& $' because they slow down
-	    # the entire program and so that is impolite for a module.
-	    if (my @parens = $tok =~ /^(.*?)($matcher)(.*)/) {
-		($tok, $match) = @parens[0, 1];
-		my $excess = $parens[ -1 ];
-		# print "leaving '$excess'\n" if length $excess;
-		# anything left? Try next time
-		unshift @$tokref, $excess if length($excess); 
-	    }
-	}
-
-	# Add what we read to what we already have
-	$total .= $tok;
-
-	# print "total is '$total' match is '$match'\n" if defined $match;
-	return ($total, $match) if defined $match;
-    } # end while
-    # print "didn't find\n";
-    return ($total, undef); # didn't find match
-} # end sub Language::Basic::Statement::cat_until_match
+sub set_line_number {
+    my $self = shift;
+    my $num = shift;
+    $self->{"line_number"} = $num;
+}
 
 ######################################################################
 # package Language::Basic::Statement::Data
@@ -215,15 +189,14 @@ package Language::Basic::Statement::Data;
 
 sub parse {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
+    my $prog = &Language::Basic::Program::current_program;
 
-    # The rest of the line is things to dim and how big to dim them
-    my $rest = join("", @$tokref);
+    # The rest of the statement is things to dim and how big to dim them
     do {
-	my $exp = new Language::Basic::Expression::Constant \$rest;
+	my $exp = new Language::Basic::Expression::Constant $token_group;
 	$prog->add_data($exp);
-    } while $rest =~ s/,//;
+    } while ($token_group->eat_if_string(","));
 } # end sub Language::Basic::Statement::Data::parse
 
 # no sub implement nec.
@@ -241,40 +214,43 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    my $rest = join("", @$tokref);
     # Function name (and args) is stuff up to equals
-    $rest =~ s/^(.*?)=// or Exit_Error("DEF missing '='!");
-    my $fdesc = $1;
-    Exit_Error("Function names must start with 'FN'!") unless $fdesc =~ /^FN/;
+    # Call LBE::Function::new with extra argument so it knows not to
+    # complain about an unknown function.
+    my $funcexp = new Language::Basic::Expression::Function 
+            ($token_group, "defining")
+	    or Exit_Error("Missing/Bad Function Name or Args in DEF!");
+    $token_group->eat_if_string("=") or Exit_Error("DEF missing '='!");
 
-    # The rest of the line is a function definition
-    my $exp = new Language::Basic::Expression::Arithmetic \$rest;
+    # We don't actually want the LB::Expression, just the function
+    # we've declared.
+    my $func = $funcexp->{"function"};
 
-    # Second argument forces 'new' to create a new Function, instead
-    # of returning undef since the function doesn't exist
-    my $func = new Language::Basic::Expression::Function(\$fdesc, $exp)
-	    or Exit_Error("Incorrect DEF!");
+    # Read function definition
+    my $exp = new Language::Basic::Expression::Arithmetic $token_group
+	or Exit_Error("Missing/Bad function definition in DEF!");
+
+    # Now actually define the function
+    $func->define($exp);
+
     $self->{"function"} = $func;
+    # TODO note that output_perl may not work now
 } # end sub Language::Basic::Statement::Def::parse
 
 # No sub implement: definition happens at compile time
 
 sub output_perl {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
-    # LB::Expression::Function object
-    my $func_exp = $self->{"function"};
+    my $prog = &Language::Basic::Program::current_program;
     # LB::Function::Defined object
-    my $func = $func_exp->{"function"};
+    my $func = $self->{"function"};
 
     # Function name
     my $name = $func->output_perl;
-    # TODO put this declaration at the end of the program. Note that if
-    # we do that, we still have to write a semicolon here, because of the
-    # statement label
     my $desc = "{\n";
+    $desc .= "INDENT\n";
 
     # Function args
     $desc .= "my (";
@@ -284,7 +260,8 @@ sub output_perl {
 
     # Function def
     my $exp = $func->{"expression"}->output_perl;
-    $desc .= "return " . $exp . ";\n}";
+    $desc .= "return " . $exp . ";\n";
+    $desc .= "UNINDENT\n}";
     # Tell program to print it out at the end of the perl script
     $prog->need_sub($name, $desc);
 
@@ -302,14 +279,14 @@ package Language::Basic::Statement::Dim;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    # The rest of the line is things to dim and how big to dim them
-    my $rest = join("", @$tokref);
+    # The rest of the statement is things to dim and how big to dim them
     do {
-	my $exp = new Language::Basic::Expression::Lvalue \$rest;
+	my $exp = new Language::Basic::Expression::Lvalue $token_group;
 	push @{$self->{"arrays"}}, $exp;
-    } while $rest =~ s/,//;
+	# TODO test that dims are constants!
+    } while ($token_group->eat_if_string(","));
 } # end sub Language::Basic::Statement::Dim::parse
 
 sub implement {
@@ -320,8 +297,6 @@ sub implement {
 	my @indices = $_->{"arglist"}->evaluate;
 	$array->dimension(@indices);
     }
-
-    return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Dim::implement
 
 # no sub output_perl necessary
@@ -337,11 +312,8 @@ package Language::Basic::Statement::End;
 use Language::Basic::Common;
 
 sub implement {
-    my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
-    # TODO Exit more gracefully?
-    $prog->set_next_line(undef);
-    return 0; # don't do any more statements, either
+    my $prog = &Language::Basic::Program::current_program;
+    $prog->goto_line(undef);
 } # end sub Language::Basic::Statement::End::implement
 
 sub output_perl {
@@ -360,61 +332,58 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    # Until the token "TO", we're copying a variable (or array cell)
-    # an equals, and the variable's initialization
-    my ($text, $tok) = $self->cat_until_match('TO\b');
-    Exit_Error("FOR missing 'TO'!") unless defined $tok;
-
-    # Read variable name
-    my $lvalue = new Language::Basic::Expression::Lvalue \$text
+    # Read variable name and "="
+    my $lvalue = new Language::Basic::Expression::Lvalue $token_group
 	    or Exit_Error("Missing variable in FOR!");
     # No strings allowed, at least for now
-    if ($lvalue->isa("Language::Basic::Expression::Lvalue::String")) {
+    if ($lvalue->isa("Language::Basic::Expression::String")) {
         Exit_Error("FOR statements can't use strings!");
     }
     $self->{"lvalue"} = $lvalue;
-    $text =~ s/^=// or Exit_Error("FOR missing '='!");
 
     # Read initialization value
+    $token_group->eat_if_string("=") or Exit_Error("FOR missing '='!");
     $self->{"start"} = 
-        new Language::Basic::Expression::Arithmetic::Numeric \$text
+        new Language::Basic::Expression::Arithmetic::Numeric $token_group
 	or Exit_Error("Missing/Bad initialization expression in FOR!");
+    $token_group->eat_if_string("TO") or Exit_Error("FOR missing 'TO'!");
 
-    # Until the token "step" OR the end of the line, we're copying an
+    # Until the token "step" OR the end of the statement, we're copying an
     # expression, namely the variable's increment
-    ($text, $tok) = $self->cat_until_match('STEP\b');
     $self->{"limit"} = 
-        new Language::Basic::Expression::Arithmetic::Numeric \$text
+        new Language::Basic::Expression::Arithmetic::Numeric $token_group
 	or Exit_Error("Missing/Bad limit expression in FOR!");
 
     # If there's anything left, it had better be a step...
     # Otherwise, step = 1
-    my $step = 1; # default value of step
-    if (defined $tok) {
-	$step = join("", @$tokref);
+    my $step;
+    if ($token_group->eat_if_string("STEP")) {
+	$step = new Language::Basic::Expression::Arithmetic::Numeric 
+	    $token_group
+	    or Exit_Error("Missing/Bad step expression in FOR!");
+    } else {
+	Exit_Error("Unknown stuff after limit expression in FOR!") 
+	    if $token_group->stuff_left;
+	my $foo = new Language::Basic::Token::Group;
+	$foo->lex("1");
+	$step = new Language::Basic::Expression::Arithmetic::Numeric $foo;
     }
-    $self->{"step"} = 
-        new Language::Basic::Expression::Arithmetic::Numeric \$step
-	or Exit_Error("Missing/Bad step expression in FOR!");
+    $self->{"step"} = $step;
 } # end sub Language::Basic::Statement::For::parse
 
 sub implement {
+    # TODO BASIC doesn't check for start being greater than limit
+    # before doing a loop once. Might want to make a flag to do it.
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $lvalue = $self->{"lvalue"};
     my $var = $lvalue->variable;
     $var->set($self->{"start"}->evaluate);
-    # TODO should really have set_limit, set_step subs. OR put this info in
-    # the For object!
-    $var->{"limit"} = $self->{"limit"}->evaluate;
-    $var->{"step"} = $self->{"step"}->evaluate;
-    $var->{"goto_line"} = $prog->line_number();
-    # TODO Should check whether we're higher than the limit here before
-    # doing the loop once. (Although it *is* accurate BASIC.)
-
-    return $self->{"next_statement"};
+    # Store this FOR statement, so that we can access it when we 
+    # get to "NEXT var"
+    $prog->store_for($self);
 } # end sub Language::Basic::Statement::For::implement
 
 # Outputs $var = start; and the beginning of a do {}
@@ -459,24 +428,22 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    # The rest of the line is an expression for the line to go to
-    my $rest = join("", @$tokref);
-    $self->{"expression"} = new Language::Basic::Expression::Arithmetic \$rest;
+    # The rest of the statement is an expression for the line to go to
+    $self->{"expression"} = new Language::Basic::Expression::Arithmetic $token_group
+        or Exit_Error("Bad expression in GOSUB!");
 } # end sub Language::Basic::Statement::Gosub::parse
 
 sub implement {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $goto = $self->{"expression"}->evaluate;
     if ($goto !~ /^\d+$/) {Exit_Error("Bad GOSUB: $goto")}
-    # Push the current line number onto the subroutine stack;
-    $prog->push_stack;
+    # Push the current statement onto the subroutine stack;
+    $prog->push_stack($self);
     # Then GOTO the new line
-    $prog->set_next_line($goto);
-
-    return 0; # no more statements on this line, since we GOTO'ed a new line
+    $prog->goto_line($goto);
 } # end sub Language::Basic::Statement::Gosub::implement
 
 sub output_perl {
@@ -484,13 +451,13 @@ sub output_perl {
     # it pushes the label name onto the global gosub stack. THen when
     # we hit the RETURN, we can pop the stack & goto back to this lable.
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $exp = $self->{"expression"};
     my $goto = $exp->output_perl;
     my $ret = "";
 
     # Form the label name to return to
-    my $label = "AL" . $prog->line_number;
+    my $label = "AL" . $prog->current_line_number;
     $ret .= "push \@Gosub_Stack, \"$label\";\n";
 
     # Form the label name to goto
@@ -521,22 +488,20 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    # The rest of the line is an expression for the line to go to
-    my $rest = join("", @$tokref);
-    $self->{"expression"} = new Language::Basic::Expression::Arithmetic \$rest;
+    # The rest of the statement is an expression for the line to go to
+    $self->{"expression"} = new Language::Basic::Expression::Arithmetic $token_group
+        or Exit_Error("Bad expression in GOTO!");
 } # end sub Language::Basic::Statement::Goto::parse
 
 # Note that this sub allows "GOTO X+17/3", not just "GOTO 20"
 sub implement {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $goto = $self->{"expression"}->evaluate;
     if ($goto !~ /^\d+$/) {Exit_Error("Bad GOTO: $goto")}
-    $prog->set_next_line($goto);
-
-    return 0; # no more statements on this line, since we GOTO'ed a new line
+    $prog->goto_line($goto);
 } # end sub Language::Basic::Statement::Goto::implement
 
 sub output_perl {
@@ -568,45 +533,95 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
     # Until the token "then", we're copying a conditional expression
-    my ($exp, $tok) = $self->cat_until_match('THEN\b');
-    Exit_Error("IF MISSING 'THEN'!") unless defined $tok;
-    $self->{"condition"} = new Language::Basic::Expression::Conditional \$exp;
+    my $exp = new Language::Basic::Expression::Conditional $token_group or
+        Exit_Error("Bad Condition in IF!");
+    $self->{"condition"} = $exp;
+    $token_group->eat_if_string("THEN") or Exit_Error("IF missing 'THEN'!");
 
-    # Until the token "else" OR the end of the line, is a new statement
-    # expression, namely the variable's increment
-    my $t1 = [];
-    while (defined ($tok = shift @$tokref)) {
-	last if $tok eq "ELSE";
-        push @$t1, $tok;
-    }
-    # Calling new with an extra arg so it knows it's parsing a THEN/ELSE.
+    # Until the token "ELSE" or the end of the line, is one or more
+    # statements to do if the IF is true
+    # TODO we need to handle ELSE either within the same statement
+    # as the last THEN statement *OR* at the beginning of a statement.
+    # Also nested IFs?
+
+    # Take everything up to ELSE into a separate Token::Group &
+    # call parsing with that so that other parse routines can complain if
+    # there's something left in their token_group. Right now, they'll have
+    # problem with ELSE token
+    # TODO need a Token::Group::split method or some such
+    my $t1 = new Language::Basic::Token::Group;
+    $t1->slurp($token_group, "ELSE");
+
+    # Call new with an extra arg so it knows it's parsing a THEN/ELSE.
     # That way, "THEN 20" gets parsed like "THEN GOTO 20"
-    my $then = new Language::Basic::Statement $t1, "parsing_if";
-    $then->parse;
-    $self->{"then_s"} = $then;
-
-    # If there's anything left, it's the else
-    if (@$tokref) {
-	# Use up all the leftover tokens
-	my $else = new Language::Basic::Statement $tokref, "parsing_if";
-	$else->parse ($tokref);
-	$self->{"else_s"} = $else;
-    } else {
-        $self->{"else_s"} = 0;
+    my $then = new Language::Basic::Statement $t1, "line_num_ok" or
+	Exit_Error("No statement found after THEN");
+    $then->parse($t1);
+    my $oldst = $then;
+    # Eat [: Statement]*
+    while (defined($t1->eat_if_class("Statement_End"))) {
+	# Plain line number is only allowed in the *first* THEN/ELSE statement
+	my $st = new Language::Basic::Statement $t1;
+	$st->parse($t1);
+	$oldst->{"next_statement"} = $st;
+	$oldst = $st;
     }
+    # Make sure we don't do the ELSE after the THEN!
+    $oldst->{"next_statement"} = undef;
+
+    # If there's anything left in $token_group, it's the ELSE.
+    my $else;
+    if (defined($token_group->eat_if_string("ELSE"))) {
+	# Use up all the leftover tokens
+	$else = new Language::Basic::Statement $token_group, "line_num_ok" or
+	    Exit_Error("No statement found after THEN");
+	$else->parse ($token_group);
+	$oldst = $else;
+	while (defined($token_group->eat_if_class("Statement_End"))) {
+	    my $st = new Language::Basic::Statement $token_group;
+	    $st->parse($token_group);
+	    $oldst->{"next_statement"} = $st;
+	    $oldst = $st;
+	}
+	$oldst->{"next_statement"} = undef;
+	Exit_Error("Unknown stuff after ELSE statement(s)") if 
+	    $token_group->stuff_left;
+    } else {
+	Exit_Error("Unknown stuff after THEN statement(s)") if 
+	    $token_group->stuff_left;
+    }
+
+    $self->{"then_s"} = $then;
+    $self->{"else_s"} = $else; # may be undef
 } # end sub Language::Basic::Statement::If::parse
+
+# Need to set line numbers for THEN and ELSE statements, so we can't
+# use the default LBS::set_line_number
+sub set_line_number {
+    my $self = shift;
+    my $num = shift;
+    $self->{"line_number"} = $num;
+    foreach ("then_s", "else_s") {
+        my $st = $self->{"$_"};
+	while (defined $st) {
+	    $st->set_line_number($num);
+	    $st = $st->{"next_statement"};
+	}
+    }
+}
 
 sub implement {
     my $self = shift;
+    my $prog = &Language::Basic::Program::current_program;
 
     if ($self->{"condition"}->evaluate) {
-        return $self->{"then_s"};
+        $prog->{"next_statement"} = $self->{"then_s"};
     } else {
-	# This may be zero, in which case, code will just continue to next line
-        return $self->{"else_s"};
+	# This may be undef, in which case, code will just continue to next line
+        $prog->{"next_statement"} = $self->{"else_s"};
     }
 } # end sub Language::Basic::Statement::If::implement
 
@@ -615,13 +630,21 @@ sub output_perl {
     my $ret = "if (";
     $ret .= $self->{"condition"}->output_perl;
     $ret .= ") {\n";
-    $ret .= "INDENT\n";
-    $ret .= $self->{"then_s"}->output_perl;
-    if ($self->{"else_s"}) {
-	$ret .= "\nUNINDENT";
+    $ret .= "INDENT";
+    my $st = $self->{"then_s"};
+    do {
+        $ret .= "\n" . $st->output_perl;
+    } while (defined ($st = $st->{"next_statement"}));
+
+    if (defined $self->{"else_s"}) {
+	# TODO only double-\n if there's a long THEN
+	$ret .= "\n\nUNINDENT";
         $ret .= "\n} else {\n";
-	$ret .= "INDENT\n";
-	$ret .= $self->{"else_s"}->output_perl;
+	$ret .= "INDENT";
+	$st = $self->{"else_s"};
+	do {
+	    $ret .= "\n" . $st->output_perl;
+	} while (defined ($st = $st->{"next_statement"}));
     }
     $ret .= "\nUNINDENT";
     $ret .= "\n}";
@@ -641,27 +664,28 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
-
-    my $rest = join("",@$tokref);
+    my $token_group = shift;
 
     # Handle INPUT "FOO"; BAR, BLAH
     # TODO I should really just try to call LBE::Constant::String and not
     # do anything if it returns undef. But currently that warns that what
     # we're trying to input isn't a quoted string if there's not quotation
     # mark.
-    if ($rest =~ /^"/) {
-        my $prompt = new Language::Basic::Expression::Constant::String \$rest;
+    if ($token_group->lookahead->
+	    isa("Language::Basic::Token::String_Constant")) {
+        my $prompt = new 
+	    Language::Basic::Expression::Constant::String $token_group;
         $self->{"to_print"} = $prompt;
-	$rest =~ s/^;// or Exit_Error("Expected ; after INPUT prompt!");
+	$token_group->eat_if_string(";") or
+	    Exit_Error("Expected ';' after INPUT prompt!");
     }
 
     # The rest of the inputs will be separated by commas
     do {
-	my $exp = new Language::Basic::Expression::Lvalue \$rest
+	my $exp = new Language::Basic::Expression::Lvalue $token_group
 	    or Exit_Error("Incorrect INPUT!");
 	push @{$self->{"lvalues"}}, $exp;
-    } while $rest =~ s/^,//;
+    } while $token_group->eat_if_string(",");
 } # end sub Language::Basic::Statement::Input::parse
 
 sub implement {
@@ -739,17 +763,17 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    # Read thing to set and the "=" after it
-    my $rest = join("",@$tokref);
-    my $lvalue = new Language::Basic::Expression::Lvalue \$rest
+    # Read variable name and "="
+    my $lvalue = new Language::Basic::Expression::Lvalue $token_group
 	    or Exit_Error("Missing variable in LET!");
     $self->{"lvalue"} = $lvalue;
-    $rest =~ s/^=// or Exit_Error("LET missing '='!");
 
-    # The rest of the line is an expression to set the variable equal to
-    $self->{"expression"} = new Language::Basic::Expression::Arithmetic \$rest
+    # The rest of the statement is an expression to set the variable equal to
+    $token_group->eat_if_string("=") or Exit_Error("LET missing '='!");
+    $self->{"expression"} = 
+	    new Language::Basic::Expression::Arithmetic $token_group
 	    or Exit_Error("Missing right side expression in LET!");
 } # end sub Language::Basic::Statement::Let::parse
 
@@ -785,42 +809,39 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    my $desc = shift @$tokref;
-    my $lvalue = new Language::Basic::Expression::Lvalue \$desc
-	    or Exit_Error("Incorrect FOR!");
+    my $lvalue = new Language::Basic::Expression::Lvalue $token_group
+	    or Exit_Error("Incorrect NEXT!");
     # No strings allowed, at least for now
-    if (ref($lvalue->variable) =~ /String/) {
-        Exit_Error("FOR statements can't use strings!");
+    if ($lvalue->variable->isa("Language::Basic::Variable::String")) {
+        Exit_Error("NEXT statements can't use strings!");
     }
     $self->{"lvalue"} = $lvalue;
 } # end sub Language::Basic::Statement::Next::parse
 
 sub implement {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
+
+    # Get the "FOR var" statement that this NEXT refers to.
+    my $for_statement = $prog->get_for($self);
+    my ($limit,$step) = 
+        map {$for_statement->{$_}->evaluate} qw (limit step);
+
+    # Increment the variable
     my $lvalue = $self->{"lvalue"};
     my $var = $lvalue->variable;
     my $value = $var->value;
-    my ($limit,$step,$goto) = 
-        map {$var->{$_}} qw (limit step goto_line);
-    Exit_Error("NEXT without FOR!") unless $goto;
-
-    # Increment
     $value += $step;
     $var->set($value);
     #print "next: '$value' '$limit' '$step' '$goto'\n";
 
     #test
     my $done = ($step > 0 ?  $value > $limit : $value < $limit);
-    if ($done) {
-	$var->{"goto_line"} = 0;
-	return $self->{"next_statement"};
-    } else {
-	# Go to the line *after* the line the FOR started on
-        $prog->set_after_next_line($goto);
-	return 0; # no more statements on this line, since we GOTO'ed a new line
+    unless ($done) {
+	# Go to the statement *after* the statement the FOR started on
+        $prog->goto_after_statement($for_statement);
     }
 } # end sub Language::Basic::Statement::Next::implement
 
@@ -858,25 +879,30 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
+    $self->{"expression"} = 
+	new Language::Basic::Expression::Arithmetic $token_group
+        or Exit_Error("Missing Arith. Exp. in ON!");
     # Until the token "GOSUB/GOTO", we're copying an arithmetic expression
-    my ($exp, $type) = $self->cat_until_match('GO(SUB|TO)\b');
-    $self->{"type"} = $type or Exit_Error("ON missing GOSUB/GOTO!");
-    $self->{"expression"} = new Language::Basic::Expression::Arithmetic \$exp;
+    my $tok = $token_group->eat_if_class("Keyword");
+    defined $tok and $tok->text =~ /^GO(SUB|TO)$/ 
+	or Exit_Error("ON missing GOSUB/GOTO!");
+    my $type = $tok->text;
+    $self->{"type"} = $type;
 
-    my $rest = join("", @$tokref);
     # The rest of the inputs will be separated by commas
     do {
-	my $exp = new Language::Basic::Expression::Arithmetic::Numeric \$rest
+	my $exp = 
+	    new Language::Basic::Expression::Arithmetic::Numeric $token_group
 	    or Exit_Error("Incorrect Expression in ON ... $type!");
 	push @{$self->{"gotos"}}, $exp;
-    } while $rest =~ s/^,//;
+    } while $token_group->eat_if_string(",");
 } # end sub Language::Basic::Statement::On::parse
 
 sub implement {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $type = $self->{"type"};
     my $value = $self->{"expression"}->evaluate;
     if ($value !~ /^\d+$/ || $value > @{$self->{"gotos"}}) {
@@ -885,17 +911,15 @@ sub implement {
 
     my $goto = ${$self->{"gotos"}}[$value-1]->evaluate;
     if ($goto !~ /^\d+$/) {Exit_Error("Bad GOTO in ON: $goto")}
-    $prog->set_next_line($goto);
+    $prog->goto_line($goto);
 
     # And if it's a GOSUB, push the program stack so we can get back
-    $prog->push_stack if $type eq "GOSUB";
-
-    return 0; # no more statements on this line, since we GOTO'ed a new line
+    $prog->push_stack($self) if $type eq "GOSUB";
 } # end sub Language::Basic::Statement::On::implement
 
 sub output_perl {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $type = $self->{"type"};
 
     # List of lines to go to
@@ -915,7 +939,7 @@ sub output_perl {
     # Form the label name to return to
     my $label;
     if ($type eq "GOSUB") {
-	$label = "AL" . $prog->line_number;
+	$label = "AL" . $prog->current_line_number;
 	$ret .= "push \@Gosub_Stack, \"$label\";\n";
     }
 
@@ -942,28 +966,35 @@ use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
-    push @$tokref, '""' unless @$tokref; # empty print statement
+    my $token_group = shift;
+    # empty print statement?
+    unless ($token_group->stuff_left) {
+        $token_group = new Language::Basic::Token::Group;
+	$token_group->lex('""');
+    }
 
-    my $rest = join("",@$tokref);
     my $endchar;
     do {
-	my $exp = new Language::Basic::Expression::Arithmetic \$rest;
-	if ($rest =~ s/([,;])//) {
-	    $endchar = $1;
-	} else {
+	my $exp = new Language::Basic::Expression::Arithmetic $token_group
+	    or Exit_Error("Weird thing to print in PRINT statement!");
+	my $tok;
+	if ($tok = $token_group->eat_if_class("Separator")) {
+	    # It's a comma or semicolon
+	    $endchar = $tok->text;
+	} elsif (! $token_group->stuff_left) {
 	    $endchar = "";
+	} else {
+	    Exit_Error("Unexpected extra thing in PRINT statement!");
 	}
 	push @{$self->{"to_print"}}, [$exp , $endchar];
 
-    } while $endchar && $rest;
-
+    } while ($token_group->stuff_left);
 } # end sub Language::Basic::Statement::Print::parse
 
 sub implement {
     # TODO More than one expression to print! Use an array of LB::Expressions
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     foreach my $thing (@{$self->{"to_print"}}) {
 	my ($exp, $endchar) = @$thing;
 	my $string = $exp->evaluate;
@@ -1005,8 +1036,6 @@ sub implement {
 	    $prog->{"column"} = 0;
 	}
     } # end foreach loop over expressions to print
-
-    return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Print::implement
 
 sub output_perl {
@@ -1050,19 +1079,19 @@ package Language::Basic::Statement::Read;
 
 sub parse {
     my $self = shift;
-    my $tokref = $self->{"tokens"};
+    my $token_group = shift;
 
-    # The rest of the line is things to dim and how big to dim them
-    my $rest = join("", @$tokref);
+    # The rest of the statement is lvalues to read in
     do {
-	my $exp = new Language::Basic::Expression::Lvalue \$rest;
+	my $exp = new Language::Basic::Expression::Lvalue $token_group
+	    or Exit_Error("Incorrect READ statement!");
 	push @{$self->{"lvalues"}}, $exp;
-    } while $rest =~ s/,//;
+    } while $token_group->eat_if_string(",");
 } # end sub Language::Basic::Statement::Read::parse
 
 sub implement {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     foreach (@{$self->{"lvalues"}}) {
         my $var = $_->variable;
 	my $data = $prog->get_data();
@@ -1070,8 +1099,6 @@ sub implement {
 	my $value = $data->evaluate;
 	$var->set($value);
     }
-
-    return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Read::implement
 
 sub output_perl {
@@ -1098,11 +1125,14 @@ sub output_perl {
 package Language::Basic::Statement::Rem;
 @Language::Basic::Statement::Rem::ISA = qw(Language::Basic::Statement);
 sub parse {
+    # Eat the whole line (including colons if any)
     my $self = shift;
-    my $tokref = $self->{"tokens"};
-    # TODO kind of bogus that the spacing won't reflect the original
-    my $rest = join(" ", @$tokref);
-    $self->{"comment"} = $rest;
+    my $token_group = shift;
+    my $tok = $token_group->eat_if_class("Comment");
+    # Use original text to retain spaces and case.
+    my $text = $tok->{"original_text"};
+    $text =~ s/REM//;
+    $self->{"comment"} = $text;
 } # end sub Language::Basic::Statement::Rem::parse
 
 sub output_perl {
@@ -1127,13 +1157,11 @@ use Language::Basic::Common;
 
 sub implement {
     my $self = shift;
-    my $prog = &Language::Basic::Program::Current_Program;
+    my $prog = &Language::Basic::Program::current_program;
     my $gosub = $prog->pop_stack or
         Exit_Error("RETURN without GOSUB");
-    # Start at the line *after* the GOSUB line
-    $prog->set_after_next_line($gosub);
-
-    return 0; # no more statements on this line, since we GOTO'ed a new line
+    # Start at the statement *after* the GOSUB statement
+    $prog->goto_after_statement($gosub);
 } # end sub Language::Basic::Statement::Return::implement
 
 sub output_perl {

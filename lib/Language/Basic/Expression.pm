@@ -13,6 +13,13 @@ conditional expressions.
 See L<Language::Basic> for the overview of how the Language::Basic module
 works. This pod page is more technical.
 
+    # Given an LB::Token::Group, create an expression AND parse it
+    my $exp = new LB::Expression::Arithmetic $token_group;
+    # What's the value of the expression?
+    print $exp->evaluate;
+    # Perl equivalent of the BASIC expression
+    print $exp->output_perl;
+
 Expressions are basically the building blocks of Statements, in that every
 BASIC statement is made up of keywords (like GOTO, TO, STEP) and expressions.
 So expressions includes not just the standard arithmetic expressions
@@ -22,15 +29,15 @@ distribution for details on the way expressions are built.
 
 =head1 DESCRIPTION
 
-
 Each subclass has (at least) three methods: 
 
 =over 4
 
 =item parse 
 
-takes a string ref and digests
-it (or returns undef if the string's syntax doesn't match that subclass)
+takes a Token::Group and eats one or more Tokens from it (or returns undef if
+the string's syntax doesn't match that subclass), setting various fields
+in the object.
 
 =item evaluate
 
@@ -50,6 +57,10 @@ The Expression subclasses closely follow the BASIC grammar. Most subclasses
 can have their own String and Numeric subclasses in turn. This allows us
 to make sure that you don't try to multiply strings together, etc.
 
+Expression subclasses:
+
+=over 4
+
 =cut
 
 use strict;
@@ -62,6 +73,7 @@ package Language::Basic::Expression::Arithmetic;
 package Language::Basic::Expression::Multiplicative;
 package Language::Basic::Expression::Unary;
 package Language::Basic::Expression::Lvalue;
+package Language::Basic::Expression::Arglist;
 package Language::Basic::Expression::Function;
 package Language::Basic::Expression::Constant;
 }
@@ -69,19 +81,19 @@ package Language::Basic::Expression::Constant;
 #TODO pod for each class!
 
 # new blesses an empty object to the class you're in, then parses
-# the text (whose reference is given in arg1) to populate the object
+# the tokens (whose reference is given in arg1) to populate the object
 # with different fields, depending on the class.
 # The parse subroutine may well call other 'new' subs and return a whole
 # hierarchy of LB::Expressions. Note that this sub is inherited by
 # all the LB::Expression::* subclasses.
 sub new {
     # important to use shift here, since parse passes any remaining @_
-    my ($class, $textref) = (shift, shift);
+    my ($class, $token_group) = (shift, shift);
     my $self = {};
     bless $self, $class;
     # parse the expression, returns subclass (or undef for a problem)
     # Also pass any extra arguments that new got
-    $self->parse($textref, @_) or return undef; 
+    $self->parse($token_group, @_) or return undef; 
     return $self;
 } # end sub Language::Basic::Expression::new
 
@@ -109,10 +121,16 @@ sub string_or_numeric {
 }
 
 ######################################################################
-{
-# An arithmetic expression is a set of multiplicative expressions connected by
-# + or - (String expressions can only be connected by +)
 
+=item Arithmetic
+
+An arithmetic expression is a set of multiplicative expressions connected by
+plus or minus signs. (String expressions can only be connected by plus,
+which is the BASIC concatenation operator.)
+
+=cut
+
+{
 package Language::Basic::Expression::Arithmetic;
 @Language::Basic::Expression::Arithmetic::ISA = qw(Language::Basic::Expression);
 
@@ -120,14 +138,15 @@ sub parse {
 # The while loop is necessary in case we have an expression like 1+2+3 
 # It will effectively evaluate the +, - operators left to right 
     my $self = shift;
-    my $textref = shift;
+    my $token_group = shift;
     my (@adds, @ops);
 
-    my $add = new Language::Basic::Expression::Multiplicative $textref;
+    my $add = new Language::Basic::Expression::Multiplicative $token_group;
     push @adds, $add;
-    while ($$textref =~ s/^([+-])//) {
-	push @ops, $1;
-	$add = new Language::Basic::Expression::Multiplicative $textref;
+    while (defined (my $tok = 
+	    $token_group->eat_if_class("Arithmetic_Operator"))) {
+	push @ops, $tok->text;
+	$add = new Language::Basic::Expression::Multiplicative $token_group;
 	push @adds, $add;
     } # end while
 
@@ -211,9 +230,14 @@ sub output_perl {
 
 } # end package Language::Basic::Expression::Arithmetic
 
+=item Multiplicative
+
+a set of unary expressions connected by '*' or '/'.  A String multiplicative
+expression is just a String unary expression.
+
+=cut
+
 {
-# A multiplicative expression is a set of unary expressions connected by * or / 
-# A String multiplicative expression is just a String unary expression.
 package Language::Basic::Expression::Multiplicative;
 @Language::Basic::Expression::Multiplicative::ISA = qw(Language::Basic::Expression);
 
@@ -221,14 +245,15 @@ sub parse {
 # Note that String unary expressions can't multiply or divide, but it doesn't
 # really matter
     my $self = shift;
-    my $textref = shift;
+    my $token_group = shift;
     my (@mults, @ops);
 
-    my $mult = new Language::Basic::Expression::Unary $textref;
+    my $mult = new Language::Basic::Expression::Unary $token_group;
     push @mults, $mult;
-    while ($$textref =~ s/^([*\/])//) {
-	push @ops, $1;
-	$mult = new Language::Basic::Expression::Unary $textref;
+    while (defined (my $tok = 
+	    $token_group->eat_if_class("Multiplicative_Operator"))) {
+	push @ops, $tok->text;
+	$mult = new Language::Basic::Expression::Unary $token_group;
 	push @mults, $mult;
     } # end while
 
@@ -277,6 +302,12 @@ package Language::Basic::Expression::Multiplicative::String;
 @Language::Basic::Expression::Multiplicative::String::ISA = qw(Language::Basic::Expression::Multiplicative);
 } # end package Language::Basic::Expression::Multiplicative
 
+=item Unary
+
+a variable, a function, a string or numeric constant, or an arithmetic
+expression in parentheses, potentially with a unary minus sign.
+
+=cut
 
 {
 package Language::Basic::Expression::Unary;
@@ -284,41 +315,43 @@ package Language::Basic::Expression::Unary;
 use Language::Basic::Common;
 
 sub parse {
-# This function parses a unary expression. That is, a variable,
-# a string or numeric constant, or an arithmetic expression in parentheses,
-# potentially with a unary minus sign.
     my $self = shift;
-    my $textref = shift;
+    my $token_group = shift;
 
     my $unary;
     my $try;
 
-    $self->{"minus"} = ($$textref =~ s/^-//); # unary minus in the expression?
+    # unary minus in the expression?
+    $self->{"minus"} = defined($token_group->eat_if_string("-"));
 
-    # if a parentheses, call eval_arithmetic recursively on what's inside
-    if ($$textref =~ s/^\(//)  {
-	$unary = new Language::Basic::Expression::Arithmetic $textref;
-	$$textref =~ s/^\)// or warn "missing ')' character?";  # skip end paren
+    # if a parentheses, (recursively) parse what's inside
+    if (defined($token_group->eat_if_class("Left_Paren"))) {
+	$unary = new Language::Basic::Expression::Arithmetic $token_group;
+	# Skip End Paren
+	defined($token_group->eat_if_class("Right_Paren")) or
+	     Exit_Error("Expected ')' to match '('!");
 
     # OR it's a function
     # NOTE that LBEF::new had better not eat the word if it returns undef!
     } elsif (defined ($try = 
-	    new Language::Basic::Expression::Function $textref)) {
+	    new Language::Basic::Expression::Function $token_group)) {
 	$unary = $try;
 
     # OR it's a String or Numeric variable
     } elsif (defined ($try = 
-	    new Language::Basic::Expression::Lvalue $textref)) {
+	    new Language::Basic::Expression::Lvalue $token_group)) {
 	$unary = $try;
 
     # OR it's a String or Numeric constant
     } elsif (defined ($try = 
-	    new Language::Basic::Expression::Constant $textref)) {
+	    new Language::Basic::Expression::Constant $token_group)) {
 	$unary = $try;
 
     # Or die
     } else {
-        Exit_Error("Unknown expression $$textref");
+	my $tok = $token_group->lookahead or
+	    Exit_Error("Found nothing when expected Unary Expression!");
+        Exit_Error("Unknown unary expression starts with '", $tok->text,"'");
     }
 
     $self->{"expression"} = $unary;
@@ -329,10 +362,6 @@ sub parse {
 } # end eval_unary
 
 sub evaluate {
-# This function evaluates a unary expression. That is, a variable,
-# a number, or an arithmetic expression in parentheses,
-# potentially with a unary minus sign.
-# 
     my $self = shift;
     my $exp = $self->{"expression"};
 
@@ -361,8 +390,14 @@ package Language::Basic::Expression::Unary::String;
 } # end package Language::Basic::Expression::Unary
 
 ######################################################################
+
+=item Constant
+
+a string or numeric constant, like "17" or 32.4
+
+=cut
+
 {
-# A string or numeric constant
 package Language::Basic::Expression::Constant;
 @Language::Basic::Expression::Constant::ISA = qw(Language::Basic::Expression);
 
@@ -374,13 +409,13 @@ package Language::Basic::Expression::Constant;
 # having all the other parse subs return self, but that's doable.
 sub parse {
     my $self = shift;
-    my $textref = shift;
+    my $token_group = shift;
     my ($const, $try);
     if (defined ($try = 
-	    new Language::Basic::Expression::Constant::Numeric $textref)) {
+	    new Language::Basic::Expression::Constant::Numeric $token_group)) {
 	$const = $try;
     } elsif (defined ($try = 
-	    new Language::Basic::Expression::Constant::String $textref)) {
+	    new Language::Basic::Expression::Constant::String $token_group)) {
 	$const = $try;
     } else {
         return undef;
@@ -397,9 +432,10 @@ package Language::Basic::Expression::Constant::Numeric;
 
 sub parse {
     my $self = shift;
-    my $textref = shift;
-    if ($$textref =~ s/^(\d*\.?\d+)//) {
-	$self->{"value"} = $1 + 0;
+    my $token_group = shift;
+    if (defined (my $tok = 
+            $token_group->eat_if_class("Numeric_Constant"))) {
+	$self->{"value"} = $tok->text + 0;
     } else {
         return undef;
     }
@@ -416,12 +452,14 @@ package Language::Basic::Expression::Constant::String;
 
 sub parse {
     my $self = shift;
-    my $textref = shift;
-    if ($$textref =~ s/^"(.*?)"//) {
-	$self->{"value"} = $1;
+    my $token_group = shift;
+    if (defined (my $tok = 
+            $token_group->eat_if_class("String_Constant"))) {
+	(my $text = $tok->text) =~ s/^"(.*?)"/$1/;
+	$self->{"value"} = $text;
     } else {
 	# TODO handle unquoted string for Input, Data statements
-	warn "Currently only understand quoted strings for String Constant: $$textref";
+	warn "Currently only understand quoted strings for String Constant";
         return undef;
     }
     # Otherwise, if value is empty string, returning it confuses LBE::new
@@ -443,14 +481,15 @@ sub output_perl {
 } # end package Language::Basic::Expression::Constant
 
 ######################################################################
-# package Language::Basic::Expression::Lvalue
-# An lvalue is a settable expression: a variable or one cell in an array.
-#
-# Fields:
-#    varptr - ref to the LB::Variable (::Array or ::Scalar) object. Note
-#        that it does NOT ref a particular cell in an LBV::Array object!
-#    arglist - a set of Arithmetic Expressions describing which exact cell
-#        in an LBV::Array to get. undef for a LBV::Scalar
+
+=item Lvalue
+
+a settable expression: a variable, X, or one cell in an array, A(17,Q). The
+"variable" method returns the actual LB::Variable::Scalar object referenced by
+this Lvalue.
+
+=cut
+
 {
 package Language::Basic::Expression::Lvalue;
 @Language::Basic::Expression::Lvalue::ISA = qw(Language::Basic::Expression);
@@ -464,17 +503,24 @@ package Language::Basic::Expression::Lvalue::String;
 @Language::Basic::Expression::Lvalue::String::ISA = qw(Language::Basic::Expression::Lvalue);
 }
 
+# Fields:
+#    varptr - ref to the LB::Variable (::Array or ::Scalar) object. Note
+#        that it does NOT ref a particular cell in an LBV::Array object!
+#    arglist - a set of Arithmetic Expressions describing which exact cell
+#        in an LBV::Array to get. undef for a LBV::Scalar
 sub parse {
     my $self = shift;
-    my $textref = shift;
-    $$textref =~ s/^([A-Z]\w*\$?)// or return undef;
-    my $name = $1;
+    my $token_group = shift;
+    defined (my $tok = 
+	    $token_group->eat_if_class("Identifier")) or
+	    return undef;
+    my $name = $tok->text;
 
     # read ( Arglist ) if it exists
     # By default, though, it's a scalar, and has no ()
     $self->{"arglist"} = undef;
     if (defined (my $arglist = 
-	    new Language::Basic::Expression::Arglist $textref)) {
+	    new Language::Basic::Expression::Arglist $token_group)) {
 	$self->{"arglist"} = $arglist;
     }
 
@@ -527,7 +573,13 @@ sub output_perl {
 } # end package Language::Basic::Expression::Lvalue
 
 ######################################################################
-# package Language::Basic::Expression::Function
+
+=item Function
+
+Either an Intrinsic or a User-Defined function.
+
+=cut
+
 #
 # Fields:
 #    function - ref to the LB::Function (::Intrinsic or ::Defined) used
@@ -552,10 +604,11 @@ package Language::Basic::Expression::Function::String;
 # function doesn't exist, we should create it rather than returning undef.
 sub parse {
     my $self = shift;
-    my $textref = shift;
-    # Note: we can't eat the func name if it turns out not to be a function!
-    $$textref =~ /^([A-Z]\w*\$?)/ or return undef;
-    my $name = $1;
+    my $token_group = shift;
+    # Don't eat it if it's not a true function name (could be an lvalue)
+    my $tok = $token_group->lookahead;
+    return undef unless $tok->isa("Language::Basic::Token::Identifier");
+    my $name = $tok->text;
     my $defining = (defined (my $exp = shift));
 
     # Look up the function name
@@ -564,38 +617,44 @@ sub parse {
     # in a DEF statement & should create the function.
     my $func;
     if ($defining) {
+	# TODO should this check be somewhere else, so that we can
+	# give a more descriptive error message in Statement::Def::parse?
+	return undef unless $name =~ /^FN/;
         $func = new Language::Basic::Function::Defined $name;
     } else {
 	$func = &Language::Basic::Function::lookup($name) or return undef;
     }
-
-    # Now that we know it's a function, eat the name
-    $$textref =~ s/^[A-Z]\w*\$?//;
     $self->{"function"} = $func;
 
+    #Now that we know it's a function, eat the token
+    $token_group->eat;
+
     # read ( Arglist )
+    # TODO Actually, whether or not we're defining, we should just read
+    # an LBE::Arglist here. If $defining, define() can make sure all args
+    # are actually Lvalues containing Scalar Variables. However, this
+    # requires that Arglist has Lvalues, rather than Arith. Exp.'s
+    # containing (ME's containing...) Lvalues.
     if ($defining) {
 	# Empty parens aren't allowed! (and \s* has been removed by lexing)
-	$$textref =~ s/\((.+)\)// or 
+	defined($token_group->eat_if_class("Left_Paren")) or
 	    Exit_Error("Function must take at least one argument.");
-	my $argtext = $1;
 	my @args;
 	do {
-	    my $arg = new Language::Basic::Expression::Lvalue \$argtext;
-	    # TODO test that arg is a Scalar!
+	    my $arg = new Language::Basic::Expression::Lvalue $token_group;
 	    push @args, $arg;
-	} while $argtext =~ s/^,//;
+	} while (defined $token_group->eat_if_string(","));
+	defined($token_group->eat_if_class("Right_Paren")) or
+	     Exit_Error("Expected ')' to match '('!");
 
-        # Define the number & type of args in the subroutine, as well as the
-	# expression that defines the function.
-	$func->define (\@args, $exp);
+        # Declare the number & type of args in the subroutine
+	$func->declare (\@args);
 
     } else {
-	my $arglist = new Language::Basic::Expression::Arglist $textref
+	my $arglist = new Language::Basic::Expression::Arglist $token_group
 	    or Exit_Error("Function without arglist!");
 	# check if the number or type of args is wrong.
-	my $error = $func->check_args($arglist);
-	Exit_Error($error) if $error;
+	$func->check_args($arglist);
 	$self->{"arglist"} = $arglist;
     }
 
@@ -633,29 +692,37 @@ sub output_perl {
 
 } # end package Language::Basic::Expression::Function
 
+=item Arglist
+
+a list of arguments to an array or function
+
+=cut
+
 {
-# A list of arguments to an array/function
 package Language::Basic::Expression::Arglist;
 @Language::Basic::Expression::Arglist::ISA = qw(Language::Basic::Expression);
 use Language::Basic::Common;
 
 sub parse {
     my $self = shift;
-    my $textref = shift;
+    my $token_group = shift;
 
     # Has to start with paren
-    $$textref =~ s/^\(// or return undef;
-    if ($$textref =~ /^\)/) {Exit_Error("Empty argument list ().")}
-
+    defined($token_group->eat_if_class("Left_Paren")) or
+	return undef;
     # Eat args
     my @args = ();
     do {
-        my $arg = new Language::Basic::Expression::Arithmetic $textref;
+	my $arg = new Language::Basic::Expression::Arithmetic $token_group;
+	# TODO test that arg is a Scalar!
 	push @args, $arg;
-    } while $$textref =~ s/^,//;
+    } while (defined($token_group->eat_if_string(",")));
 
     # Has to end with paren
-    $$textref =~ s/^\)// or Exit_Error("Arglist without ')' at end!");
+    defined($token_group->eat_if_class("Right_Paren")) or
+	Exit_Error("Arglist without ')' at end!");
+    unless (@args) {Exit_Error("Empty argument list ().")}
+
     $self->{"arguments"} = \@args;
 } # end sub Language::Basic::Expression::Arglist::parse
 
@@ -675,20 +742,30 @@ sub output_perl {
 } # end package Language::Basic::Expression::Arglist
 
 ######################################################################
-# package Language::Basic::Expression::Conditional
-# A BASIC string expression (e.g., A$, or "hello there")
+
+=item Arglist
+
+A conditional expression, like "A>B+C". Note that in BASIC, (unlike Perl or 
+C) you can't change a conditional expression into an integer or string.
+
+=cut
+
 {
 package Language::Basic::Expression::Conditional;
 @Language::Basic::Expression::Conditional::ISA = qw(Language::Basic::Expression);
+use Language::Basic::Common;
 
 sub parse {
-    my ($self, $textref) = @_;
-    my $e1 = new Language::Basic::Expression::Arithmetic $textref;
+    my ($self, $token_group) = @_;
+    my $e1 = new Language::Basic::Expression::Arithmetic $token_group or
+        Exit_Error("Unexpected text at beginning of Cond. Exp.");
 
-    $$textref =~ s/^([<=>]+)// or Exit_Error("No Rel. Op. in Conditional Exp.");
-    my $op = $1;
+    defined (my $tok = $token_group->eat_if_class("Relational_Operator")) 
+	or Exit_Error("No Rel. Op. in Conditional Exp.");
+    my $op = $tok->text;
 
-    my $e2 = new Language::Basic::Expression::Arithmetic $textref;
+    my $e2 = new Language::Basic::Expression::Arithmetic $token_group or
+        Exit_Error("Unexpected text in Cond. Exp. after '$op'");
     $self->{"exp1"} = $e1;
     $self->{"exp2"} = $e2;
 
@@ -759,5 +836,11 @@ package Language::Basic::Expression::Conditional::Numeric;
 package Language::Basic::Expression::Conditional::String;
 @Language::Basic::Expression::Conditional::String::ISA = qw(Language::Basic::Expression::Conditional);
 } # end package Language::Basic::Expression::Conditional
+
+=pod
+
+=back
+
+=cut
 
 1; # end package Language::Basic::Expression

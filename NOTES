@@ -1,29 +1,52 @@
 Major stuff:
 
-I should be able to get rid of the '=' in &lex now, since we always join
-& the find the = by parsing stuff one by one.
+Note that I'm currently allowing you to dim with Expressions!
+(This actually isn't so bad, as long as expressions use constants.
+Variables are all zero, though.)
 
-Maybe lex can remove all whitespace EXCEPT put spaces around keywords?
-Because we don't want to get LETA=2. Or "2>XTHEN" while parsing an IF. Can we
-do that by just splitting on (".*?" and) whitespace, then 
-    grep {if /^\w+/ {$a=$&; grep {$_ eq $a} @Keywords}} @tokens?
-We could even give each statement its own lex, and run $statement->lex before
-$statement->parse. Then it would only look for the particular keywords in its
-own statement. Or maybe we can get rid of LEX and just have a nexttok sub
-that effectively does the same thing, & cat_until calls nexttok until it
-hits something interesting. In fact, I might even be able to use nexttok
-in parsing, so that I don't eat something before I'm supposed to -- e.g.
-we can't eat a function name when testing it, since it might actually be
-a variable name. We could have an eating & a non-eating nexttok. Might I
-even be able to have nexttok have a local string that it eats from (which
-can be set by set_tok) s.t. we don't have to pass textref around everywhere?
-I guess nexttok would be in LB::Common. We could also make nexttok be
-intelligent, returning EITHER whitespace separated words (where $ counts
-as a word character!), string constants, or tokens like (,;).
+Expression TODO:
+- add/mult to "exp" in Arith/Mult. (in 1.20)
+- classes inherit from LBE::String/Numeric (in 1.20)
+- parse blesses. new returns $obj=$class->parse($self) (in 1.20)
+- If arith. has only one mult. exp., return the ME (in 1.20)
+- LogicalAnd/LogicalOr exps (easy).
+- LBE::Boolean class that LogicalAnd/LogicalOr inherit from. Be careful with
+  string_or_numeric stuff! Actually, Arith/Mult will automatically return
+  Booleans rather than blessing them to A/M so that should be safe. But
+  what about other things that call string_or_numeric? E.g., INT((A>B)).
+  ("int(A>B)" would be an error since Arglist looks for arith. exps. But
+  extra parens would make Unary call Cond.) Should Boolean be an error?
+- Or do we want to get rid of String/Numeric & just move to "type" field?
+  Kind of nice to be able to say new LBE::Foo::Numeric. OTOH, I don't think
+  we're really doing testing right now! E.g., if you look for an
+  LBE::Arithmetic::Numeric, is there any check for that? We may be able
+  to do type checking by examining the class name & testing for 
+  isa String, Numeric or Boolean.
+- Add NOT to rel op
+- add "is_nested" to Unary if parens. (in stuff/Exp_Try). But note that if an Or
+  is in a Unary, we should return the Or so that Rel. Exp. sees it.
+  (Alternatively, Rel. Exp. could test for Unary's "expression" field. (We
+  know we won't have to delve into subexps to find out if it's boolean.) 
+  Or just have a Unary::Boolean class!
+- Unary calls LogicalAnd with "maybe_arithmetic". Which passes it down to
+  Relational. if Relational is called with "maybe", then if there's no
+  rel. op. it just returns the exp., which gets passed through Logicals
+  to Unary again. This handles IF (1+1) > 2
+- If Rel. Exp. gets a Unary that's conditional, it returns it (possibly along
+  with a leading NOT!). (Don't even look for a rel. op. since it would be
+  illegal!) This handles IF NOT (A>B) THEN as well as IF (A>B) AND...
+
+If statements also need to suck up stuff if they're multistatements.
+Different BASIC programs I've got seem to allow ELSE right after a
+colon OR right after the last THEN statement. Others allow IF/THEN within
+an ELSE. (It doesn't make sense in a THEN because the ELSE would slurp up the
+other else.) Do we allow that? (If not, make it an error to get a Statement::If
+when "parsing_if" is set!)
+
+Indent in subs created from DEF using same code as main Program::output_perl.
+
     Note that we may want to parse Input/Data stuff intelligent, e.g. to
 have non-quoted strings. Could we use nexttok with that too?
-    Far in the future, we could even have a cat_until_eos, which looks for
-either : or \n.
 
 Can we make all expressions either string, numeric, or logical? Note that
 arithmetic exps need to be string or numeric, since + is handled differently.
@@ -60,13 +83,7 @@ logical. (Basically, they'd be string/numeric if they have only one term; same
 for LogicalOr/And. And if a LogicalAnd has two terms but one is numeric,
 that's a BUG. ("x>2 AND 17")
 
-Note that variable->{"goto_line"} never gets initialized, because Variable::new
-just blesses to Variable::Numeric. Should I have a "refine" subroutine that'll
-set some new stuff?
-
 Case insensitivity in strings? 
-
-Ugly kludge in LB::Expression::Constant::parse. See TODO there.
 
 Test suite should also translate each to perl & run it & make sure we get the
 same output, in order to test output_perl functionality.
@@ -81,9 +98,6 @@ Enhancements to BASIC:
 If I want to parse unquoted strings, then I either need to call 
 new LBE::Constant directly, or call Unary with some flag set s.t. we're
 not allowed to interpret the string as a new variable.
-
-If we ever get good enough, we should test that there's no text left
-in a statement when we're done parsing it or there's an error.
 
 I should have an error if we try to assign a string expression to a numeric
 variable. Similarly, there should be a problem if we're parsing & find a
@@ -104,10 +118,11 @@ More complicated conditional expressions
 : (i.e. several statements in a line)
 Exponentiation
 More functions: ABS, SQR, string functions, etc.
+file read/write
 GET, GET$
 RESTORE
 NEXT I,J
-float numbers (4.3e-3 et al.), integer variables
+scientific notation, integer variables
 correct handling of RND.
 
 ----------------------------------------------------------------------
@@ -142,14 +157,16 @@ Better AI to print nicer code.
       $test_for = sub {$step_for_k < $limit_for_k}, 
   and then at the end of the loop just test for &$test_for. But it's arguable
   whether that's less convoluted.
-* Any way to definitely know when to add \n's to separate blocks of code? End
-  of a do block looks dumb when it's in a nested loop. Maybe I could
-  only leave whitespace if we're not indented? Same with ifs? (In that case,
-  testing has to be done in LBP::output_perl, which may be a dangerous (or
-  impossible, if it's calling all the statemeout outputters) place to do it.)
+* Any way to definitely know when to add \n's to separate blocks of code? 
+  Maybe I could only leave whitespace if we're not indented? Same with ifs? (In
+  that case, testing has to be done in LBP::output_perl, which may be a
+  dangerous (or impossible, if it's calling all the statemeout outputters)
+  place to do it.) Have a MAYBENEWLINE command to put space iff we're not
+  currently indenting?
 * Put ifs on one line if there's no else & it's short? Note that I can test
   length of the string representing the "then" statement (and whether it has
-  \n's in it).
+  \n's in it). Alternatively, put extra \n before else if it's more than one
+  line.
 * Remove all labels but those that are goto'ed to?  Note that (a) this doesn't
   work if there are any computed gotos/gosubs (but who really uses those?) It
   requires keeping a list of the lines that are goto'd to during parsing, so
@@ -160,6 +177,3 @@ Uninitialized value errors from perl -w.
 
 - output BASIC? In theory, that could be useful for debugging. Right now,
 we can't print out lines after we've parsed them.
-
-- An interpreter using Term::Readline where you could actually input stuff
-line by line, load new programs, run them, etc. (David Glasser started this)

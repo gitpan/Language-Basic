@@ -7,20 +7,30 @@ Included scripts (in scripts/ directory until you make install):
 - basic2pl.pl translates BASIC programs into Perl. (It's not
    pretty, but it's not as bad as you might think, either.)
 
-Documentation is included as POD in the .pm files. There's also a syntax
-description in the file Syntax.
+Documentation is included as POD in the .pm files. There's also a
+description of the currently supported BASIC syntax in the file Syntax.
 
 WARNING: don't let the RCS version number fool you. This is an ALPHA RELEASE.
 
 --------------------------------------------------------------------------------
 
-Installation should be as simple as
+Installation should be as simple as:
 
     tar zvxf Language::Basic-*.*.gz
     perl Makefile.PL
     make
     make test
-    make install (if you really want to!)
+    make install (if you want to)
+
+
+Please let me know if "make test" fails.  If you'd like to  be really helpful, 
+try something like:
+
+	make test TEST_VERBOSE=1 TEST_FILES=t/if.t
+
+This will run just the given test file and print out the BASIC program it ran, 
+the expected output, and the output it received, for each failed test in
+that file.
 
 --------------------------------------------------------------------------------
 
@@ -30,10 +40,10 @@ licenses. I hope he doesn't mind my distributing it.) Translating it to Perl,
 and comparing it with the Perl Power Tools wump(6) port, are exercises left
 to the reader.
 
-I invite comments, criticisms, bug reports, bug fixes, and ideas. Also, feel
-free to send along any fun/interesting BASIC programs you have lying around.
-And please let me know if "make test" fails.  On the other hand, please check
-the BUGS section of the Language::Basic man page before sending in bug reports.
+I welcome comments, criticisms, bug reports, bug fixes, and ideas.  (But please
+check the BUGS section of the Language::Basic man page before sending in bug
+reports.) Actual patches are even more welcome. Also, feel free to send along
+any fun/interesting BASIC programs you have lying around.
 
 Stay tuned for more excitement. See the TODO file for planned changes.
 First, I plan to add some more BASIC functionality. Second, I hope to make

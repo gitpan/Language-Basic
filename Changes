@@ -1,4 +1,9 @@
 Revision history for Perl extension Language::Basic.
+
+ 1.43  2000/06/15 19:42:53
+	- New package Language::Basic::Token means smarter lexing/parsing!
+ 	- multiple, colon-separated statements on a line!
+
  1.35  2000/06/06 13:25:03
 	- basic2pl.pl script was accidentally left out of the 1.32 release!
 	- more pod (including pod for subpackages)
