@@ -461,8 +461,9 @@ sub parse {
 
     # read ( Arglist )
     if ($defining) {
-	$$textref =~ s/\((.*)\)// or 
-	    Exit_Error("DEF missing function arguments!");
+	# Empty parens aren't allowed! (and \s* has been removed by lexing)
+	$$textref =~ s/\((.+)\)// or 
+	    Exit_Error("Function must take at least one argument.");
 	my $argtext = $1;
 	my @vars;
 	do {
@@ -512,6 +513,7 @@ sub parse {
 
     # Has to start with paren
     $$textref =~ s/^\(// or return undef;
+    if ($$textref =~ /^\)/) {Exit_Error("Empty argument list ().")}
 
     # Eat args
     my @args = ();

@@ -41,7 +41,7 @@ require Exporter;
 );
 
 # Stolen from `man perlmod`
-$VERSION = do { my @r = (q$Revision: 1.26 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.27 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 # Sub-packages
 use Language::Basic::Common;
@@ -121,6 +121,7 @@ sub input {
     my ($self, $filename) = @_;
     my $fh = new IO::File $filename;
     die "Error opening $filename: $!\n" unless defined $fh;
+    my $old_num = -1;
 
     while (<$fh>) {
         next if /^\s*$/; # empty lines
@@ -128,11 +129,21 @@ sub input {
 
 	# Line Number
 	# no \n on die so perl gives chunk #
-	s/^\s*(\d+)\s+// or die "No line number"; 
+	s/^\s*(\d+)\s+// 
+	    or die "Missing line number! Last line number read was $old_num.\n";
 	my $line_num = $1;
+
+	# Make sure lines are in numerical order. If they're not, it's most
+	# likely a bug.
+	# TODO if we ever create a real interpreter, we have to get rid of
+	# this restriction
+	if ($line_num <= $old_num) {
+	    die "Line $line_num: lines must be in increasing order.\n";
+	}
 
 	# Create an LB::Line with what's left of the line
 	$self->{"lines"}->{$line_num} = new Language::Basic::Line $_;
+	$old_num = $line_num;
     }
     close ($fh);
 
@@ -174,6 +185,8 @@ sub implement {
     my $self = shift;
     # Start on the first line of the program
     $Counter = 0;
+    # By default, increment lines normally
+    undef $Next_Counter;
 
     # Loop over lines while there are lines
     # END statement sets Counter to -1. Falling off end of program also ends.
@@ -220,14 +233,14 @@ sub get_data {
 # Go to the next line. If Next_Counter is set, go there. Otherwise, go to
 # the next line in numerical order.
 sub goto_next_line {
-    if ($Next_Counter) {
+    if (defined $Next_Counter) {
         $Counter = $Next_Counter;
     } else {
         $Counter++;
     }
 
     # By default, next time we just increment the line number
-    $Next_Counter = 0;
+    undef $Next_Counter;
 }
 
 # Which line do we move to after doing the current line?
