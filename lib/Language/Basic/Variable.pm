@@ -9,13 +9,15 @@ package Language::Basic::Variable;
 Language::Basic::Variable - Module to handle parsing and implementing
 BASIC variables.
 
-=head1 DESCRIPTION
+=head1 SYNOPSIS
 
 See L<Language::Basic> for the overview of how the Language::Basic module
 works. This pod page is more technical.
 
 There are two sorts of variables: Arrays and Scalars. Each of those
 classes has a subclass for Numeric or String variables.
+
+=head1 DESCRIPTION
 
 An Array needs to have full LBV::Scalar objects in it, rather than just
 having an array of values. The reason is that, for example, you might
@@ -131,8 +133,6 @@ sub new {
 } # end package Language::Basic::Variable::Scalar
 
 ######################################################################
-# package Language::Basic::Variable::Array
-# A BASIC array
 #
 # Fields:
 #     cells - list (of lists, for 2- or more dimensional arrays) of
@@ -223,10 +223,10 @@ sub get_cell {
     my @sizes = @{$self->{"dimensions"}};
     unless (@sizes == @indices) {Exit_Error("Wrong number of indices!")}
 
-    # TODO multi-dim arrays
     my $ptr = $self->{"cells"};
     foreach my $index (@indices) {
         my $size = shift(@sizes);
+	# index can't be negative or greater than the array size
 	if ($index !~ /^\d+$/ || $index > $size) {
 	    &Exit_Error ("Illegal array indexing '@indices'")
 	}

@@ -1,16 +1,32 @@
 Changes
-Language/Basic.pm		The main module
-Language/Basic/Common.pm	Methods used by lots of packages (e.g. errors)
-Language/Basic/Expression.pm	Arithmetic, string, and other expressions
-Language/Basic/Function.pm	Intrinsic & user-defined functions
-Language/Basic/Statement.pm	If, Goto, and other sorts of BASIC statements
-Language/Basic/Variable.pm	Numeric and String Scalar and Array Variables
 MANIFEST			This file
 Makefile.PL
-NOTES				Notes on future plans, etc.
-README
+NOTES				Notes on future plans, etc. (verbose)
+README				Module introduction
 Syntax				Description of understood BASIC syntax
-basic.pl			A BASIC interpreter
-test.bas			A test BASIC program(s) run by test.pl
-test.pl
+TODO				Plans for the future (brief)
+lib/Language/Basic.pm		The main module
+lib/Language/Basic/Common.pm	Methods used by lots of packages (e.g. errors)
+lib/Language/Basic/Expression.pm	Arithmetic, string, & other expressions
+lib/Language/Basic/Function.pm	Intrinsic & user-defined functions
+lib/Language/Basic/Statement.pm	If, Goto, and other sorts of BASIC statements
+lib/Language/Basic/Variable.pm	Numeric and String Scalar and Array Variables
+scripts/basic.pl		Runs BASIC programs
+scripts/basic2pl.pl		Program to convert BASIC to Perl
+scripts/termbasic.pl		A Term::Readline BASIC interpreter
+t/aaa_me_first.t		Test whether LB works at all
+t/array.t
+t/data.t
+t/def.t
+t/end.t
+t/expression.t
+t/for.t				t/*.t scripts test various features of BASIC
+t/gosub.t
+t/goto.t			
+t/if.t				
+t/intrinsic.t
+t/let.t
+t/on.t
+t/testbasic.pl			Include file used by t/*.t
+t/zzz_me_last.t			Not exactly a test... :)
 wumpus.bas			Gregory Yob's classic Hunt the Wumpus game

@@ -1,9 +1,17 @@
 Revision history for Perl extension Language::Basic.
+ 1.35  2000/06/06 13:25:03
+	- basic2pl.pl script was accidentally left out of the 1.32 release!
+	- more pod (including pod for subpackages)
+	- Test suite!
+	- Overhaul of program guts, coded by David Glasser. Got rid of lots
+	  of Evil Global Variables.
+	- New program termbasic.pl is a Term::Readline interpreter (also
+	  David Glasser's).
 
  1.32  2000/05/29 22:48:03
 	- BUG: User defined functions weren't actually using the
 	  arguments being passed to them
-	- Translate BASIC to Perl!
+	- Translate BASIC to Perl with basic2pl.pl!
 
  1.27  2000/05/24 19:20:55
 	- Lines not in numerical order in the BASIC program are a fatal error

@@ -1,0 +1,22 @@
+Short term:
+- Allow more complicated conditional expressions
+- STOP command
+
+Medium term:
+
+- LINE INPUT
+- CLS?
+- YETI (needs only LINE INPUT?)
+- Basic_Print & Basic_Input subs for output_perl, so that when you translate
+  a program into Perl, the I/O is more like BASIC's. (May be Hard, actually.)
+- Upgrade test suite
+- Update termbasic (NEW, LIST, etc.)
+- other intrinsic functions: tab, sqr...
+- upgrade error handling (Carp, etc.)
+- Upgrade basic.pl & other scripts, possibly include switches (and pod!)
+- Improve pod for LB & its subpackages
+
+Long term:
+
+- colon (multiple statements on a line)
+- output BASIC, debug BASIC code

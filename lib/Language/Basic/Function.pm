@@ -3,10 +3,20 @@ package Language::Basic::Function;
 
 =pod
 
-=head1 DESCRIPTION
+=head1 NAME
 
-Language::Basic::Function and its subclasses handle user-defined and
-intrinsic Functions.
+Language::Basic::Function - Package to handle user-defined and intrinsic
+Functions in BASIC.
+
+=head1 SYNOPSIS
+
+See L<Language::Basic> for the overview of how the Language::Basic module
+works. This pod page is more technical.
+
+A Function can be either an intrinsic BASIC function, like INT or CHR$,
+or a user-defined function, like FNX (defined with the DEF command).
+
+=head1 DESCRIPTION
 
 The define method defines the number and type of the function's arguments,
 as well as what the function actually does.
@@ -16,6 +26,11 @@ arguments were input.
 
 The evaluate method actually calculates the value of the function, given
 certain arguments.
+
+The lookup method looks up the function in the function lookup table.
+
+The output_perl method returns a string that's the Perl equivalent to
+the BASIC function.
 
 =cut
 
@@ -71,8 +86,11 @@ sub check_args {
     # Handle optional args
     my ($min_types, $max_types);
     my $types = $self->{"arg_types"};
-    $min_types = length($types);
-    $types =~ s/;// and $min_types = length($`);
+    if ($types =~ s/(.*);/$1/) {
+        $min_types = length($1);
+    } else {
+        $min_types = length($types);
+    }
     $max_types = length($types);
 
     $error .= ("Wrong number of arguments to function\n") 
@@ -80,8 +98,10 @@ sub check_args {
     # Now check each argument type
     foreach my $type (split (//, $types)) {
 	my $arg = shift @args or last; # may be optional args
-	ref($arg) =~ /(String|Numeric)$/;
-	my $atype = substr($&,0,1);
+	# This should never happen, hence die, not Exit_Error
+        ref($arg) =~ /(String|Numeric)$/ or 
+	    die "Error in LBF::Defined::check_args";
+	my $atype = substr($1,0,1);
 	if ($atype ne $type) {
 	    $error .= $type eq "N" ?
 		"String argument given, Numeric required.\n" :
@@ -92,9 +112,14 @@ sub check_args {
     return $error;
 } # end sub Language::Basic::Variable::check_args
 
-######################################################################
-# package Language::Basic::Function::Intrinsic
-# Intrinsic BASIC functions
+=head2
+
+Class Language::Basic::Function::Intrinsic
+
+This class handles intrinsic BASIC functions.
+
+=cut
+
 #
 # Fields:
 #     subroutine - a ref to a sub that implements the BASIC routine in Perl
@@ -104,16 +129,27 @@ package Language::Basic::Function::Intrinsic;
 @Language::Basic::Function::Intrinsic::ISA = qw(Language::Basic::Function);
 use Language::Basic::Common;
 
-# Called at the beginning of the program to set the intrinsic functions up.
+=pod
+
+The initialize method sets up BASIC's supported functions at the beginning
+of the program. The all-important @Init holds a ref for each function
+to an array holding: 
+- the function name, 
+- the number and type of arguments (in a Perl function prototype-like style), 
+- a subref that performs the equivalent of the BASIC function, and 
+- a string for the output_perl method. That string is either the name of an
+  equivalent Perl function, like "ord" for BASIC's "ASC", or (if there is no
+  exact equivalent) a BLOCK that performs the same action.
+Adding intrinsic BASIC functions therefore involves adding to this array.
+
+=cut
+
 sub initialize {
-    # Each value in the array is an arrayref.
-    # Each arrayref has: name, type, subref, funcstring.
     # The type is an N or S for each Numeric or String argument the
     # function takes.
-    # subref ref's a sub that does the perl equivalent of the basic function.
     # funcstring is a string that gives the perl equivalent to the
-    # basic function. (Used for output_perl) If it's just a word, then perl
-    # and basic have exactly equivalent functions, which  makes the function
+    # BASIC function. (Used for output_perl) If it's just a word, then perl
+    # and BASIC have exactly equivalent functions, which  makes the function
     # call much easier. Otherwise, it's something in {} that will become
     # a sub.
     # TODO it would be pretty sexy to have the subref and the funcstring
@@ -135,7 +171,9 @@ sub initialize {
 	        my $a=shift; 
 		if ($a>127 || $a<0) {Exit_Error("Arg. to CHR\$ must be < 127")}
 		chr($a);
-	    }, "chr" ],
+	    }, "chr" 
+	],
+
 	['MID$', "SN;N", 
 	    sub {
                 my ($str, $index, $length) = @_;
@@ -143,13 +181,23 @@ sub initialize {
                 return (defined $length ?
                     substr($str, $index, $length) :
                     substr($str, $index) );
-	    }, '{my ($str, $index, $length) = @_; $index--; return (defined $length ? substr($str, $index, $length) : substr($str, $index) );}' ],
+	    }, 
+	    join("\n\t",
+	        "{", 
+	        'my ($str, $index, $length) = @_;',
+		'$index--;', 
+		'return (defined $length ? ',
+		'    substr($str, $index, $length)',
+		'    : substr($str, $index) );') 
+	    . "\n}" 
+	],
     );
 
     # Initialize intrinsic functions
     foreach (@Init) {
 	my ($name, $arg_types, $subref, $perl_sub) = @$_;
 	my $func = new Language::Basic::Function::Intrinsic ($name);
+	# Now set up the Function object with the function definition etc.
 	$func->define($arg_types, $subref, $perl_sub);
     }
 } # end sub Language::Basic::Function::Intrinsic::initialize
@@ -176,6 +224,7 @@ sub evaluate {
 # output the function name
 sub output_perl {
     my $self = shift;
+    my $prog = &Language::Basic::Program::Current_Program;
 
     # If it's a basic function that translates to an intrinsic function,
     # just return the function
@@ -193,7 +242,7 @@ sub output_perl {
 
     # Note that we're going to have to add sub description at the
     # end of the perl script
-    &Language::Basic::Program::need_sub($name, $perl_sub);
+    $prog->need_sub($name, $perl_sub);
 
     return $name;
 } # end sub Language::Basic::Function::Intrinsic::output_perl
@@ -229,7 +278,7 @@ sub define {
 
     foreach my $arg (@$arglistref) {
         ref($arg) =~ /(String|Numeric)$/ or die "Error in LBF::Defined::define";
-	$types .= substr($&,0,1);
+	$types .= substr($1,0,1);
     }
     $self->{"arg_types"} = $types;
 

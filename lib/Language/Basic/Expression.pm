@@ -3,16 +3,48 @@ package Language::Basic::Expression;
 
 =pod
 
-=head1 DESCRIPTION
+=head1 NAME
 
-Language::Basic::Expression and its subclasses handle string, numeric, and
+Language::Basic::Expression - Package to handle string, numeric, and
 conditional expressions. 
 
-Each subclass has (at least) two methods: parse takes a string ref and digests
-it (or returns undef if the string's syntax doesn't match that subclass);
-evaluate actually calculates the value of the expression. For a string
+=head1 SYNOPSIS
+
+See L<Language::Basic> for the overview of how the Language::Basic module
+works. This pod page is more technical.
+
+Expressions are basically the building blocks of Statements, in that every
+BASIC statement is made up of keywords (like GOTO, TO, STEP) and expressions.
+So expressions includes not just the standard arithmetic expressions
+(like 1 + 2), but also lvalues (scalar variables or arrays), functions,
+and constants. See the Syntax file included with the Language::Basic
+distribution for details on the way expressions are built.
+
+=head1 DESCRIPTION
+
+
+Each subclass has (at least) three methods: 
+
+=over 4
+
+=item parse 
+
+takes a string ref and digests
+it (or returns undef if the string's syntax doesn't match that subclass)
+
+=item evaluate
+
+actually calculates the value of the expression. For a string
 or numeric constant or variable, that just means taking the stored value
 of that object. For other Expressions, you actually need to do math.
+
+=item output_perl
+
+Gives a string with the Perl equivalent to a BASIC expression. "1+2" is
+converted to "1+2", but "A" becomes "$a", "A$" becomes "$a_str", and
+function calls may be even more complicated.
+
+=back
 
 The Expression subclasses closely follow the BASIC grammar. Most subclasses
 can have their own String and Numeric subclasses in turn. This allows us
@@ -33,6 +65,8 @@ package Language::Basic::Expression::Lvalue;
 package Language::Basic::Expression::Function;
 package Language::Basic::Expression::Constant;
 }
+
+#TODO pod for each class!
 
 # new blesses an empty object to the class you're in, then parses
 # the text (whose reference is given in arg1) to populate the object
@@ -433,8 +467,8 @@ package Language::Basic::Expression::Lvalue::String;
 sub parse {
     my $self = shift;
     my $textref = shift;
-    $$textref =~ s/^[A-Z]\w*\$?// or return undef;
-    my $name = $&;
+    $$textref =~ s/^([A-Z]\w*\$?)// or return undef;
+    my $name = $1;
 
     # read ( Arglist ) if it exists
     # By default, though, it's a scalar, and has no ()
@@ -520,8 +554,8 @@ sub parse {
     my $self = shift;
     my $textref = shift;
     # Note: we can't eat the func name if it turns out not to be a function!
-    $$textref =~ /^[A-Z]\w*\$?/ or return undef;
-    my $name = $&;
+    $$textref =~ /^([A-Z]\w*\$?)/ or return undef;
+    my $name = $1;
     my $defining = (defined (my $exp = shift));
 
     # Look up the function name
@@ -651,8 +685,8 @@ sub parse {
     my ($self, $textref) = @_;
     my $e1 = new Language::Basic::Expression::Arithmetic $textref;
 
-    $$textref =~ s/^[<=>]+// or Exit_Error("No Rel. Op. in Conditional Exp.");
-    my $op = $&;
+    $$textref =~ s/^([<=>]+)// or Exit_Error("No Rel. Op. in Conditional Exp.");
+    my $op = $1;
 
     my $e2 = new Language::Basic::Expression::Arithmetic $textref;
     $self->{"exp1"} = $e1;

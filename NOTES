@@ -60,9 +60,6 @@ logical. (Basically, they'd be string/numeric if they have only one term; same
 for LogicalOr/And. And if a LogicalAnd has two terms but one is numeric,
 that's a BUG. ("x>2 AND 17")
 
-I REALLY need more comments! E.g., consolidate (in Foo::new) all possible
-fields for that object's hash.
-
 Note that variable->{"goto_line"} never gets initialized, because Variable::new
 just blesses to Variable::Numeric. Should I have a "refine" subroutine that'll
 set some new stuff?
@@ -71,9 +68,12 @@ Case insensitivity in strings?
 
 Ugly kludge in LB::Expression::Constant::parse. See TODO there.
 
-Test suite should run a bunch of BASIC programs (like in bwbasic). We could
-also translate each to perl & run it & make sure we get the same output,
-in order to test output_perl functionality.
+Test suite should also translate each to perl & run it & make sure we get the
+same output, in order to test output_perl functionality.
+
+Better errors. E.g., instead of using die, we should have a different kind
+of error function that says something like "Internal Error on line...". I.e.,
+it'll be useful for us to know what line we're on.
 
 ----------------------------------------------------------------------
 Enhancements to BASIC:

@@ -7,9 +7,6 @@ look like Perl regexps are Perl regexps.)
     THEN ELSE TO STEP
     (Others not yet implemented...)
 
- Separator
-     , ;
-
  Arithmetic Expression:
     Mult. Exp.  Arith. Op.  Mult. Exp.
     String Exp. + String Exp.
@@ -66,6 +63,9 @@ Constant:
 
  Conditional Operator: AND OR
 
+ Print Separator
+     , ;
+
 ----------------------------------------------------------------------
 
 Statement:
@@ -91,7 +91,7 @@ Statement:
 
     ON Arith. Exp. GOTO/GOSUB Arith. Exp. [, Arith. Exp....]
 
-    PRINT [Arith. Exp. [Separator] [ Arith. Exp. [Separator] ...] ]
+    PRINT [Arith. Exp. [Print Separator] [ Arith. Exp. [Print Separator] ...] ]
 
     READ Lvalue [, Lvalue...]
 

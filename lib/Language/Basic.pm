@@ -12,11 +12,31 @@ Language::Basic - Perl Module to interpret BASIC
     use Language::Basic;
 
     my $Program = new Language::Basic::Program;
-    $Program->input("program.bas"); # Read the lines from a file
-    $Program->parse; # Parse the lines
-    $Program->implement; # Run the program
+    $Program->input("program.bas"); # Read lines from a file
+    $Program->parse; # Parse the Program
+    $Program->implement; # Run the Program
+    $Program->output_perl; # output Program as a Perl program
 
-The program basic.pl that comes with the module basically does the above.
+    $Program->line("20 PRINT X"); # add one line to existing Program
+
+Featured scripts:
+
+=over 4
+
+=item basic.pl
+
+Runs BASIC programs from the command line.
+
+=item termbasic.pl
+
+Term::Readline program. Input one line of BASIC at a time, then run the
+program.
+
+=item basic2pl.pl
+
+Outputs a Perl program that does the same thing as the input BASIC program.
+
+=back
 
 =head1 DESCRIPTION
 
@@ -26,7 +46,6 @@ may inspire you to write new ones!
 The aspects of the language that are supported are described below. Note
 that I was pretty much aiming for Applesoft BASIC (tm) ca. 1985, not some
 modern BASIC with real subroutines.
-
 
 =cut
 
@@ -41,7 +60,7 @@ require Exporter;
 );
 
 # Stolen from `man perlmod`
-$VERSION = do { my @r = (q$Revision: 1.32 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.35 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 # Sub-packages
 use Language::Basic::Common;
@@ -73,40 +92,60 @@ Methods:
 
 {
 package Language::Basic::Program;
-# Parsing_If: some things change when you're parsing a THEN or ELSE,
-# e.g., "30" means "GOTO 30"
-use vars qw($Parsing_If);
+use Language::Basic::Common;
 
-# The programs (sorted) line numbers.
-my @Line_Numbers;
-# Counter and Next_Counter are indices in @Line_Numbers of the current
-# and next line to be executed.
-my ($Next_Counter, $Counter);
-# The subroutine stack. In BASIC, it's just a list of line numbers we came from.
-my @Stack;
-# The data holder (stuff from DATA statements, read by READ statements)
-my @Data;
-# Functions whose perl-equivalent subs we need to print out at the end
-# of the program
-my %Needed_Subs;
-# Indenting for outputted Perl
-my $Output_Indent = 2; # eight spaces by default
-
+# Fields:
+# lines		Keys are line numbers, values are LB::Line objects
+# curr_line	Current line number in the program
+# next_line	The line we're going to implement after this one
+# first_line	First line in the program
+# stack		The subroutine stack. In BASIC, it's just a list of line 
+# 		numbers we came from.
+# data		The data holder (stuff from DATA statements, read by READ)
+# parsed	Has this Program been parsed since the last time 
+#		new lines were added?
+# needed_subs	Functions whose perl-equivalent subs we need to print out 
+#		at the end of the program. (Keys are names of subs, values
+#		are sub descriptions.)
+# column	Current column of the screen the program is printing to
 sub new {
     my ($class, $infile) = @_;
-
-    # Most of the time, we aren't parsing IF statements
-    $Parsing_If = 0;
 
     #Initialize the intrinsic functions
     &Language::Basic::Function::Intrinsic::initialize();
 
     my $in = {
-	# Keys are line numbers, values are LB::Line objects
 	"lines" => {},
+        "cur_line" => undef,
+        "next_line" => undef,
+        "first_line" => undef,
+        'stack' => [],
+        'data' => [],
+        'parsed' => 0,
+	"needed_subs" => {},
+	"column" => 0,
     };
     bless $in, $class;
 } # end sub Language::Basic::Program::new
+
+=item Current_Program
+
+Returns the program currently being parsed/implemented/whatever
+
+=item Set_Current_Program
+
+Sets arg0 to be the Current Program
+
+=cut
+
+my $_Current_Program;
+sub Current_Program {
+    return $_Current_Program;
+}
+sub Set_Current_Program {
+    my $self = shift or die "LBP::Set_Current_Program must have argument!\n";
+    $_Current_Program = $self;
+}
 
 =item input
 
@@ -115,15 +154,9 @@ except for taking the line number out of the line.
 
 =cut
 
-# Read the program in from file arg0
-# TODO decide on the exact splitup between input/parse
-# Should input literally just read the text?
-# Rather, why not read the lines in from the file in the main program. (or
-# have a LB::input_file sub that can do it too). Call LB::Program::parse with
-# a reference to an array of lines of text (need not be chomped, etc.)
-# Then in theory you could parse just one line, etc.
 sub input {
     my ($self, $filename) = @_;
+    $self->Set_Current_Program;
     my $fh = new IO::File $filename;
     die "Error opening $filename: $!\n" unless defined $fh;
     my $old_num = -1;
@@ -133,28 +166,80 @@ sub input {
 	chomp;
 
 	# Line Number
-	# no \n on die so perl gives chunk #
-	s/^\s*(\d+)\s+// 
-	    or die "Missing line number! Last line number read was $old_num.\n";
-	my $line_num = $1;
+	my $line_num = $self->_add_line($_);
+	defined $line_num
+	    or die "Missing line number " .
+		($old_num > 0 ? "after line $old_num\n" : "on first line\n");
 
-	# Make sure lines are in numerical order. If they're not, it's most
-	# likely a bug.
-	# TODO if we ever create a real interpreter, we have to get rid of
-	# this restriction
+	# In input files, we make sure lines are in numerical order. 
+	# If they're not, it's most likely a bug.
+	# Same is not true for a Term::Readline interpreter
 	if ($line_num <= $old_num) {
-	    die "Line $line_num: lines must be in increasing order.\n";
+	    die "Line $line_num: lines in file must be in increasing order.\n";
 	}
 
-	# Create an LB::Line with what's left of the line
-	$self->{"lines"}->{$line_num} = new Language::Basic::Line $_;
 	$old_num = $line_num;
     }
     close ($fh);
 
-    @Line_Numbers = sort {$a <=> $b} keys %{$self->{"lines"}};
+    # order the lines
+    $self->_fix_lines;
+    $self->{'parsed'} = 0;
 
 } # end sub Language::Basic::Program::input
+
+=item line
+
+This method takes a line of BASIC (arg1, already chomped), forms a new LB::Line
+with it, and adds it to the Program (arg0). It doesn't do any parsing,
+except for taking the line number out of the line.
+
+=cut
+
+sub line {
+    my $self = shift;
+    $self->Set_Current_Program;
+    my $line = shift; # sans \n
+
+    defined $self->_add_line($line) or die "Missing line number in line()!\n";
+    $self->_fix_lines;
+    $self->{'parsed'} = 0;
+} # end sub Language::Basic::Program::line
+
+sub _add_line {
+    # takes the line (sans \n), returns the line number read or undef if there
+    # is none.
+    # You must call _fix_lines between _add_line and returning to the
+    # user's program!
+
+    my $self = shift;
+    my $line = shift;
+
+    # Line Number
+    $line =~ s/^\s*(\d+)\s+// or return;
+    my $line_num = $1;
+
+    # Create an LB::Line with what's left of the line
+    $self->{'lines'}{$line_num} = new Language::Basic::Line $line;
+
+    return $line_num;
+} # end sub Language::Basic::Program::_add_line
+
+# fix the ordering of the lines in the program
+sub _fix_lines {
+    my $self = shift;
+
+    my @line_numbers = sort {$a <=> $b} keys %{$self->{"lines"}};
+
+    for (my $i = 0; $i < @line_numbers - 1; $i++) { # process all but last
+	my $line = $self->{'lines'}{ $line_numbers[$i] };
+	$line->set_next( $line_numbers[ $i+1 ] );
+    } 
+
+    $self->{'lines'}{ $line_numbers[-1] }->set_next( undef );
+
+    $self->{'first_line'} = $line_numbers[0];
+} # end sub Language::Basic::Program::_fix_lines 
 
 =item parse
 
@@ -167,14 +252,21 @@ sub parse {
 # This function takes lines of the program and "orders" them,
 # then parses each one.
     my $self = shift;
-    $Counter = 0;
+    $self->Set_Current_Program;
+
+    return if $self->{'parsed'};
+
+    $self->{'curr_line'} = $self->{'first_line'};
 
     # Loop through the lines in the program
-    while ($Counter <= $#Line_Numbers) {
-        my $line = $self->{"lines"}->{$Line_Numbers[$Counter]};
+    while (defined $self->{'curr_line'}) {
+        my $line = $self->{"lines"}->{ $self->{'curr_line'} };
+	
 	$line->parse;
-	$Counter++;
+	$self->{'curr_line'} = $line->get_next;
     }
+
+    $self->{'parsed'} = 1;
 } # end sub Language::Basic::Program::parse
 
 =item implement
@@ -188,114 +280,177 @@ hits an END statement or "falls off" the end of the program.
 
 sub implement {
     my $self = shift;
-    # Start on the first line of the program
-    $Counter = 0;
-    # By default, increment lines normally
-    undef $Next_Counter;
+    $self->Set_Current_Program;
+    # In case you're lazy & call implement w/out parsing first
+    $self->parse unless $self->{'parsed'};
+
+    # Zero stack, etc., start at beginning of program
+    $self->start;
 
     # Loop over lines while there are lines
-    # END statement sets Counter to -1. Falling off end of program also ends.
-    while ($Counter>=0 && $Counter <= $#Line_Numbers) {
+    # curr_line will be undef for END statements or when you "fall off" the
+    # end of the program
+    while (defined $self->{'curr_line'}) {
 	# TODO create a "trace" command that prints out line numbers
 	# for debugging
-	#print "Line $Line_Numbers[$Counter]\n";
-        my $line = $self->{"lines"}->{$Line_Numbers[$Counter]};
+	#print "Line ",$self->{"curr_line"},"\n";
+        my $line = $self->{"lines"}->{ $self->{'curr_line'} };
+	
+	# By default, go on to next line in numerical order after this one
+	# (self->{'next_line'} may be changed while implementing the line!)
+	$self->{'next_line'} = $line->get_next;
+
+	# Implement the line!
 	$line->implement;
-	&goto_next_line;
+	
+	# Advance!
+	$self->{'curr_line'} = $self->{'next_line'};
     }
+
 } # end sub Language::Basic::Program::implement
 
-# What line are we currently on?
-sub line_number {
-    return $Line_Numbers[$Counter];
-}
+=item start
 
-# "Call a subroutine", i.e. push the current line number onto the calling stack
+This method erases program stack and moves line pointer to beginning of program
+
+It should be called any time we start going through the program.
+(Either implement or output_perl.)
+
+=cut
+
+# Don't erase "data". It's set during parsing.
+sub start {
+    my $self = shift;
+    $self->{"stack"} = [];
+    $self->{"column"} = 0;
+
+    # Start on the first line of the program
+    $self->{'curr_line'} = $self->{'first_line'};
+} # end sub Language::Basic::Program::start
+
+=item line_number
+
+What line are we currently on?
+
+=cut
+
+sub line_number { return shift->{"curr_line"}; }
+
+=item push_stack
+
+"Call a subroutine", i.e. push the current line number onto the Program's
+calling stack
+
+=cut
+
 sub push_stack {
-    my $num = &line_number;
-    push @Stack, $num;
+    my $self = shift;
+    my $num = $self->line_number;
+    push @{ $self->{'stack'} }, $num;
 }
 
 # "Return from a subroutine", i.e. pop the last calling line number 
 # from the calling stack
 sub pop_stack {
-    return pop @Stack;
+    my $self = shift;
+    return pop @{ $self->{'stack'} };
 }
 
-# Add a piece of data (i.e. parsing a DATA statement)
+=item add_data
+
+Add a piece of data to the Program's data storage, to be accessed
+later. (i.e. parsing a DATA statement)
+
+=cut
+
 sub add_data {
+    my $self = shift;
     my $thing = shift;
-    push @Data, $thing;
+    push @{ $self->{'data'} }, $thing;
 }
 
-# Get a piece of data (i.e. implementing a READ statement)
+=item get_data
+
+Get a piece of data that was stored earlier. (i.e. implementing a READ
+statement)
+
+=cut
+
 sub get_data {
-    my $thing = shift @Data or 
-        Exit_Error("More items READ than input in DATA!");
+    my $self = shift;
+    @{ $self->{'data'} } or Exit_Error("More items READ than input in DATA!");
+    my $thing = shift @{ $self->{'data'} }; 
     return $thing;
 }
 
-# Go to the next line. If Next_Counter is set, go there. Otherwise, go to
-# the next line in numerical order.
-sub goto_next_line {
-    if (defined $Next_Counter) {
-        $Counter = $Next_Counter;
-    } else {
-        $Counter++;
-    }
+=item set_next_line
 
-    # By default, next time we just increment the line number
-    undef $Next_Counter;
-}
+Which line number do we move to after doing the current line?
 
-# Which line do we move to after doing the current line?
+=cut
+
 sub set_next_line {
+    my $self = shift;
     my $next_line = shift;
-
-    # Special case: END statement causes this
-    unless (defined $next_line) { $Next_Counter = -1; return; }
-
-    # We could do a binary search here, but not worth it for tens
-    # or hundreds of lines
-    foreach (0..$#Line_Numbers) {
-	$Next_Counter = $_, last if $Line_Numbers[$_] == $next_line;
-    }
-    Exit_Error("Can't find line $next_line!") unless defined $Next_Counter;
+    $self->{'next_line'} = $next_line;
+    
+    Exit_Error("Can't find line $next_line!") 
+	if defined $next_line and not defined $self->{'lines'}{ $next_line };
 } # end sub Language::Basic::Program::set_next_line
 
-# Just like set_next_line, except go the line *after* that line.
-# E.g., RETURN from a GOSUB, you want to return to the GOSUB line
-# but start execution after that line. Same with FOR.
+=item set_after_next_line
+
+Just like set_next_line, except go the line *after* that line.
+E.g., RETURN from a GOSUB, you want to return to the GOSUB line
+but start execution after that line. Same with FOR.
+
+=cut
+
 sub set_after_next_line {
+    my $self = shift;
     my $next_line = shift;
-    &set_next_line($next_line);
-    $Next_Counter++;
-}
+    my $next_obj  = $self->{'lines'}{ $next_line };
+    $next_line = $next_obj->get_next if defined $next_obj;
+    $self->set_next_line($next_line);
+} # end sub Language::Basic::Program::set_after_next_line
 
 sub output_perl {
 # This function takes lines of the program and outputs each as perl
     my $self = shift;
+    $self->Set_Current_Program;
+    # In case you're lazy & call implement w/out parsing first
+    $self->parse unless $self->{'parsed'};
+
     my $sep = '#' x 78;
-    $Counter = 0;
+    # TODO these variables should be changeable by switches to basic2pl!
+    my $spaces_per_indent = 4;
+    # Indenting for outputted Perl
+    my $Output_Indent = 2; # eight spaces by default
 
     # Beginning of the program
     print '#!/usr/bin/perl -w';
     print "\n#Translated from BASIC by basic2pl\n\n";
 
-    if (@Data) {
+    if (@{$self->{"data"}}) {
 	print "$sep\n# Setup\n#\n";
 	print "# Read data\n";
         print "while (<DATA>) {chomp; push \@Data, \$_}\n\n";
     }
 
+    # Zero program stack, etc., start at beginning of program
+    $self->start;
+
     # Loop through the lines in the program
     print "$sep\n# Main program\n#\n";
-    while ($Counter <= $#Line_Numbers) {
-	my $line_num = $Line_Numbers[$Counter];
-        my $line = $self->{"lines"}->{$line_num};
-	my $label = "L$Line_Numbers[$Counter]:";
-	my $spaces_per_indent = 4;
+    while (defined $self->{'curr_line'}) {
+	my $line_num = $self->{"curr_line"};
+	#warn "Line $line_num\n";
+        my $line = $self->{"lines"}->{ $self->{'curr_line'} };
+	my $label = "L$line_num:";
+
+	# What's the line?
 	my $out = $label . $line->output_perl;
+	
 	# Print labels all the way against the left edge of the line,
 	# then indent the rest of the line.
 	# Split with -1 so final \n's don't get ignored
@@ -316,35 +471,60 @@ sub output_perl {
 	    print $_;
 	    print "\n"; # the \n we lost from split, or the last \n
 	}
-	$Counter++;
+
+	# Go through lines in order
+	$self->{'curr_line'} = $line->get_next;
     }
 
-    print "\n$sep\n# Subroutine Definitions\n#\n" if %Needed_Subs;
+    my $n = $self->{"needed_subs"};
+    print "\n$sep\n# Subroutine Definitions\n#\n" if %$n;
     # Print out required subroutines
-    foreach (sort keys %Needed_Subs) {
-        print (join(" ", "sub", $_, $Needed_Subs{$_}));
+    foreach (sort keys %$n) {
+        print (join(" ", "sub", $_, $n->{$_}));
 	print " # end sub $_\n\n";
     }
 
     # If there were any DATA statements...
-    if (@Data) {
+    if (@{$self->{"data"}}) {
         print "\n\n$sep\n# Data\n#\n__DATA__\n";
-	print join("\n", map {$_->output_perl} @Data);
+	print join("\n", map {$_->output_perl} @{$self->{"data"}});
 	print "\n";
     }
 } # end sub Language::Basic::Program::output_perl
 
+=item need_sub
+
+Tells the Program that it needs to use the sub named arg0 (whose definition
+is in arg1). This is used for outputting a Perl translation of a BASIC
+program, so that you only write "sub mid_str {...}" if MID$ is used in
+the BASIC program.
+
+=back
+
+=cut
+
 sub need_sub {
+    my $self = shift;
+    my $n = $self->{"needed_subs"};
     my ($func_name, $func_desc) = @_;
-    return if exists $Needed_Subs{$func_name};
-    $Needed_Subs{$func_name} = $func_desc;
-}
+    return if exists $n->{$func_name};
+    $n->{$func_name} = $func_desc;
+} # end sub Language::Basic::Program::need_sub
 
 } # end package Language::Basic::Program
 
 ######################################################################
-# package Language::Basic::Line
-# A line in a BASIC program
+
+=head2 Class Language::Basic::Line
+
+This class handles one line of a BASIC program, which has one or more
+Statements on it.
+
+Methods:
+
+=over 4
+
+=cut
 
 {
 package Language::Basic::Line;
@@ -358,34 +538,67 @@ sub new {
 	"text" => $text,
 	# Pointer to first LB::Statement on the line
 	"first_statement" => 0,
+	# number of next line (accessed with set/get_next)
+	'next_line' => undef,
     };
     bless $in, $class;
 } # end sub Language::Basic::Line::new
 
-# Parse a line and the statements within it
-# First the lines are broken into tokens (and whitespace is removed,
-# except in strings)
-# Then the statement is parsed, depending on what sort of command it is.
+=item get_next
+
+Returns the next line number in the Program
+
+=item set_next
+
+Sets the next line number in the Program to be arg1.
+
+=cut
+
+sub get_next { return shift->{'next_line'}; }
+
+sub set_next {
+    my $self = shift;
+    my $next = shift;
+
+    $self->{'next_line'} = $next;
+} # end sub Language::Basic::Line::set_next
+
+=item parse
+
+This method breaks the line up into tokens (and removes whitespace, except in
+strings), then parses the first statement on the line. (Eventually, it
+will parse all statements on the line, but colons aren't currently supported.)
+
+=cut
+
 sub parse {
-    my $line = shift;
-    my @tokens = $line->lex;
+    my $self = shift;
+    my @tokens = $self->lex;
 
     # Create the new Statement and figure out what kind of statement it is.
     # $statement will be an object of a subclass LB::Statement::*)
     my $statement = new Language::Basic::Statement \@tokens;
-    $line->{"first_statement"} = $statement;
+    $self->{"first_statement"} = $statement;
 
+    # TODO parse multiple statements on one line!
     # Parse the statement, depending on what subclass it is.
     $statement->parse;
 }
 
-# Return a list of tokens
+=item lex
+
+This method breaks the line up into tokens. Currently that means it
+separates by whitespace (which is discarded) and equals signs. (The = split
+isn't necessary but it's convenient.) Anything in double quotation marks is its
+own token, and no splitting is done within it.
+
+=cut
+
 # TODO if we're smart about reading expressions, we won't need whitespace
 # around, e.g., "TO" in FOR statements.
-
 sub lex {
-    my $line = shift;
-    my $text = $line->{"text"};
+    my $self = shift;
+    my $text = $self->{"text"};
     # Separate string constants from everything else
     my @pieces = split(/(".*?")/, $text);
     my @tokens = map {
@@ -401,20 +614,31 @@ sub lex {
     return @tokens;
 }
 
-# Implement one line of the program
+=item implement
+
+This method actually executes the line. That is, it starts with the first
+statement on the line, and performs it. If there's another statement to
+implement on this line (e.g., an IF/THEN, or multiple statements
+separated by colons (when that's supported)) then LB::Statement::implement
+returns that Statement, which in turn is implemented.
+
+=back
+
+=cut
+
 sub implement {
     my $self = shift;
     #print "$Language::Basic::Program::Counter ", $self->{"text"},"\n";
-    my $Curr_Statement = $self->{"first_statement"};
+    my $curr_statement = $self->{"first_statement"};
 
     # If there's more than one statement on the line, we have to do them
     # all. Statement::implement will return 0 if there aren't any more.
-    while ($Curr_Statement) {
-	#print "Statement class ",ref($Curr_Statement),"\n";
+    while ($curr_statement) {
+	#print "Statement class ",ref($curr_statement),"\n";
 	# Hooray for OO; just call "implement" on everything!
 	# implement should return non-zero if there's another statement
 	# on this line.
-	$Curr_Statement = $Curr_Statement->implement;
+	$curr_statement = $curr_statement->implement;
     }
 } # end sub Language::Basic::Line::implement
 
@@ -557,11 +781,38 @@ Spaces are (currently) required around various pieces of the program, like
 THEN, ELSE, GOTO. That is, GOTO20 won't work. This may or may not change
 in the future.
 
+=item *
+
+When you use basic.pl (&LB::Program::input), the lines in the input file must
+be in numerical order. When using termbasic.pl (&LB::Program::line), this
+rule doesn't apply.
+
 =back
+
+
+=head1 BUGS
+
+This is an alpha release and likely contains many bugs; these are merely
+the known ones.
+
+If you use multiple B<Language::Basic::Program> objects in a Perl program,
+functions and variables can leak over from one to another.
+
+It is possible to get some Perl warnings; for example, if you input a string
+into a numerical variable and then do something with it.
+
+B<PRINT> and so forth all go to the select-ed output handle; there really 
+ought to be a way to set for a B<Program> the output handle.
+
+There needs to be better and consistent error handling, and a more
+extensive test suite.
 
 =head1 AUTHOR
 
 Amir Karger (akarger@cpan.org)
+
+David Glasser gave ideas and feedback, hunted down bugs, and sent in a major
+patch to help the LB guts.
 
 =head1 COPYRIGHT
 
