@@ -1,10 +1,15 @@
+Language::Basic TODO file
+
+See NOTES file for a much more verbose list of things to do and why, as
+well as current coding issues.
+
 Short term:
-- Allow more complicated conditional expressions
+- Isolate LB::Program's I/O to LBP::Print/LBP::Input methods. 
+- Read and write Files (PRINT #...)
 
 Medium term:
 
 - LINE INPUT
-- Read and write Files (PRINT #...)
 - STOP command
 - CLS/CLEAR? (Curses? Lots of \n's? \e[2J?)
 - YETI (needs only LINE INPUT? Or also file handling?)
@@ -19,4 +24,6 @@ Medium term:
 
 Long term:
 
+- No line numbers nec.?
 - output BASIC, debug BASIC code
+- QBASIC?! (I.e., real function calls and ...)

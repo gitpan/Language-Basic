@@ -246,4 +246,13 @@ package Language::Basic::Variable::Array::String;
     qw (Language::Basic::Variable::Array Language::Basic::Variable::String);
 } # end package Language::Basic::Variable::Array
 
+{
+# set ISA for "return type" classes
+package Language::Basic::Variable::Numeric;
+@Language::Basic::Variable::Numeric::ISA = qw
+    (Language::Basic::Variable Language::Basic::Numeric);
+package Language::Basic::Variable::String;
+@Language::Basic::Variable::String::ISA = qw
+    (Language::Basic::Variable Language::Basic::String);
+}
 1; # end package Language::Basic::Variable

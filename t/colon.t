@@ -14,7 +14,10 @@ my ($code, $expected); # one program & its expected outpt
 $code =<<'ENDCODE';
     10 print "It did "; : print "not ";
     20 print "fail. ";
-    30 for a = 1 to 3 : print a; : next a
+    30 for a = 1 to 3 : gosub 50 : next a
+    40 END
+    50 print a;
+    60 return
 ENDCODE
 $expected = "It did not fail. 1 2 3 ";
 &setup_test($code, $expected);

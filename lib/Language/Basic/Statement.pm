@@ -99,7 +99,7 @@ package Language::Basic::Statement::Return;
 #          expression like X or AR(3+Q), which can be on the left hand
 #          side of an assignment statement
 #     expression - an LB::Expression:: subclass (e.g., Arithmetic or
-#          Conditional.) Sometimes there are multiple expressions.
+#          Relational.) Sometimes there are multiple expressions.
 sub new {
     my $class = shift;
     my $token_group = shift;
@@ -536,7 +536,7 @@ sub parse {
     my $token_group = shift;
 
     # Until the token "then", we're copying a conditional expression
-    my $exp = new Language::Basic::Expression::Conditional $token_group or
+    my $exp = new Language::Basic::Expression::Logical_Or $token_group or
         Exit_Error("Bad Condition in IF!");
     $self->{"condition"} = $exp;
     $token_group->eat_if_string("THEN") or Exit_Error("IF missing 'THEN'!");

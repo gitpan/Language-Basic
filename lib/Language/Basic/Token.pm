@@ -50,6 +50,7 @@ package Language::Basic::Token::Comment;
 package Language::Basic::Token::Arithmetic_Operator;
 package Language::Basic::Token::Multiplicative_Operator;
 package Language::Basic::Token::Relational_Operator;
+package Language::Basic::Token::Logical_Operator;
 
 package Language::Basic::Token::Identifier;
 package Language::Basic::Token::Keyword;
@@ -86,10 +87,12 @@ sub _new {
     return undef if ($$textref =~ /^\s*$/);  # end of a whole line
 
     # Test each possible LBT subclass.
-    # Keyword/Comment tests have to come before Identifier. Others probably
-    # don't overlap so they don't matter.
+    # Identifier needs to come after all other reserved words since 
+    # it allows any letters
+    # Other classes basically don't overlap, so their order doesn't matter
     foreach my $c (qw(Keyword 
 		Comment
+		Logical_Operator
     		Identifier 
 		String_Constant Numeric_Constant
 		Left_Paren Right_Paren Separator 
@@ -113,7 +116,9 @@ sub _new {
 
 =pod
 
-The "text" method returns the text that makes up the token.
+The "text" method returns the text that makes up the token. Note that text
+is stored in upper case (except for string constants, which are stored
+exactly as entered).
 
 =cut
 
@@ -167,6 +172,7 @@ sub lex {
 	push @tokens, $tok;
     }
     $self->{"tokens"} = \@tokens;
+    #print $self->print;
 }
 
 =item lookahead
@@ -205,6 +211,9 @@ sub eat {
 This method eats the next token from Group arg0 if it matches string arg1
 If it ate a token, it returns it. Otherwise (or if there are no tokens left)
 it returns undef.
+
+Note that the string to match should be upper case, since all \w tokens
+are stored as uppercase.
 
 =cut
 
@@ -326,7 +335,6 @@ my @Keywords = qw (
     LET NEXT ON PRINT READ RETURN
     TO STEP THEN ELSE
     );
-    # TODO AND OR NOT, new commands
 # Make sure not to accept something like "FORT"
 sub regex { "(?i)(" . join("|", @Keywords) . ")\\b"}
 
@@ -461,6 +469,23 @@ package Language::Basic::Token::Relational_Operator;
 sub regex { '<[=>]?|>=?|='}
 
 } # end package Language::Basic::Token::Relational_Operator
+
+=item Logical_Operator
+
+AND, OR, NOT
+
+=cut
+
+{
+package Language::Basic::Token::Logical_Operator;
+@Language::Basic::Token::Logical_Operator::ISA = qw(Language::Basic::Token);
+
+sub regex {
+    my @Keywords = qw (AND OR NOT); 
+    "(?i)(" . join("|", @Keywords) . ")\\b"
+}
+
+} # end package Language::Basic::Token::Logical_Operator
 
 =item Comment
 

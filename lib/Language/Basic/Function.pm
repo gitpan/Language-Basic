@@ -246,9 +246,11 @@ sub output_perl {
 } # end sub Language::Basic::Function::Intrinsic::output_perl
 
 package Language::Basic::Function::Intrinsic::String;
-@Language::Basic::Function::Intrinsic::String::ISA = qw(Language::Basic::Function::Intrinsic);
+@Language::Basic::Function::Intrinsic::String::ISA = 
+    qw(Language::Basic::Function::Intrinsic Language::Basic::Function::String);
 package Language::Basic::Function::Intrinsic::Numeric;
-@Language::Basic::Function::Intrinsic::Numeric::ISA = qw(Language::Basic::Function::Intrinsic);
+@Language::Basic::Function::Intrinsic::Numeric::ISA = 
+    qw(Language::Basic::Function::Intrinsic Language::Basic::Function::Numeric);
 } # end package Language::Basic::Function::Intrinsic
 
 ######################################################################
@@ -341,9 +343,20 @@ sub output_perl {
 } # end sub Language::Basic::Function::Defined::output_perl
 
 package Language::Basic::Function::Defined::String;
-@Language::Basic::Function::Defined::String::ISA = qw(Language::Basic::Function::Defined);
+@Language::Basic::Function::Defined::String::ISA = 
+    qw(Language::Basic::Function::Defined Language::Basic::Function::String);
 package Language::Basic::Function::Defined::Numeric;
-@Language::Basic::Function::Defined::Numeric::ISA = qw(Language::Basic::Function::Defined);
+@Language::Basic::Function::Defined::Numeric::ISA = 
+    qw(Language::Basic::Function::Defined Language::Basic::Function::Numeric);
 } # end package Language::Basic::Function::Defined
 
+{
+# set ISA for "return type" classes
+package Language::Basic::Function::Numeric;
+@Language::Basic::Function::Numeric::ISA = qw
+    (Language::Basic::Function Language::Basic::Numeric);
+package Language::Basic::Function::String;
+@Language::Basic::Function::String::ISA = qw
+    (Language::Basic::Function Language::Basic::String);
+}
 1; # end package Language::Basic::Function

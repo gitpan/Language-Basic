@@ -60,7 +60,7 @@ require Exporter;
 );
 
 # Stolen from `man perlmod`
-$VERSION = do { my @r = (q$Revision: 1.43 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.44 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 # Sub-packages
 use Language::Basic::Common;
@@ -828,7 +828,7 @@ This is a (hopefully current) description of what Language::Basic supports.
 For each command, I give an example use of that command, and possible
 a comment or two about it.
 
-Also see the Syntax file included in the distribution, which describes
+Also see L<Language::Basic::Syntax>, which describes
 the exact syntax for each statement, expressions, variable names, etc.
 
 =head2 Commands
@@ -871,7 +871,6 @@ a RETURN statement, it will come back to the statement just after the GOSUB.
 
 IF X > Y THEN 30 ELSE X = X + 1. ELSE is not required. In a THEN or ELSE,
 a lone number means GOTO that number (also known as an implied GOTO).
-AND/OR/NOT still aren't supported for conditional expressions.
 
 =item INPUT
 
@@ -885,13 +884,14 @@ LET X=4. The word "LET" isn't required; i.e. X=4 is just like LET X=4.
 =item NEXT
 
 NEXT I. Increment I by STEP, test against its limit, go back to the FOR
-statement if it's not over its limit.
+statement if it's not over (or under, for a descending loop) its limit.
 
 =item ON
 
 ON X-3 GOSUB 10,20. This is equivalent to: 
- IF X-3 = 1 THEN GOSUB 10
- IF X-3 = 2 THEN GOSUB 20
+  IF X-3 = 1 THEN GOSUB 10
+  IF X-3 = 2 THEN GOSUB 20
+
 ON ... GOTO is also allowed.
 
 =item PRINT
@@ -936,7 +936,8 @@ Multiple statements can appear on one line, separated by colons. E.g.:
 10 FOR I = 1 TO 10: PRINT I: NEXT I, or 20 FOR A = 1 TO 4: GOSUB 3000: NEXT A.
 Note that after a THEN, all statements are considered part of the THEN,
 until a statement starting with ELSE, after which all remaining statements are
-part of the ELSE.
+part of the ELSE. A REM slurps up everything until the end of the line,
+including colons.
 
 =item * 
 
@@ -1021,6 +1022,11 @@ changed from COMPLEX to "Perl Eclectic Retro interpreter which did not use
 Parse::LEX", or PERPLEX, but I settled for Language::Basic instead.
 
 =head1 SEE ALSO
+
+All of the L<Language::Basic::*>s associated with Language::Basic sub-modules
+
+L<Language::Basic::Syntax>, which describes the syntax supported by
+the Language::Basic module
 
 perl(1), wump(6)
 

@@ -10,7 +10,7 @@
 push @INC, "t";
 do 'testbasic.pl';
 
-my ($code, $expected); # one program & its expected outpt
+my ($code, $expected); # one program & its expected output
 
 # Use single quotes because of "$" et al.
 $code =<<'ENDCODE';
@@ -23,6 +23,40 @@ $code =<<'ENDCODE';
     70 print "2" + "2";
 ENDCODE
 $expected = "2 2 2 2 2 22";
+&setup_test($code, $expected);
+
+# Test lots of Boolean expressions
+@exps = (
+    "2>1", "1<2", "2<>1", "1=1", "(2>1)", "2>=1", "1<=2", "2<=2", "2>=2",
+    "NOT 1>2", "NOT (1>2)",
+    "2>1 AND 2>1",
+    "2>1 OR 2>1", "2>1 OR 1>2", "1>2 OR 2>1",
+    "1>2 AND 2>1 OR 2>1",
+    "NOT 1>2 AND 2>1 OR 2>1"
+);
+($code, $expected) = ("", "");
+$num = 10;
+foreach (@exps) {
+    $code .= "$num if $_ then print 1;\n";
+    $expected .= "1 ";
+    $num += 10;
+}
+&setup_test($code, $expected);
+
+# False expressions
+my @exps = (
+    "1>2",
+    "NOT 1<2",
+    "2>1 AND 1>2", "1>2 AND 2>1", "1>2 AND 1>2",
+    "1>2 OR 1>2",
+);
+($code, $expected) = ("", "");
+my $num = 10;
+foreach (@exps) {
+    $code .= "$num if $_ then print 1; else print 0;\n";
+    $expected .= "0 ";
+    $num += 10;
+}
 &setup_test($code, $expected);
 
 &perform_tests;

@@ -1,40 +1,84 @@
-Major stuff:
+BUGS/do now:
+
+POD for LB::Common!
+
+REM without any text after it is a bug cuz it's looking for a \s char.
+Change regex to REM($|\s.*) or something similar.
+
+I currently reevaluate step & limit each time I get to a next! That's probably
+wrong. Instead, give For a separate limit_exp field, which stores the exp
+permanently, and a limit field which stores limit_exp->evaluate throughout
+the duration of the loop.
+
+Do soon:
+
+Change INPUT "Foo"; not to print the question mark? I think it may be
+more standard.
+Handle INPUT "Foo", bar. It's just as easy as ;, and means you don't have
+to print a question mark.
 
 Note that I'm currently allowing you to dim with Expressions!
 (This actually isn't so bad, as long as expressions use constants.
-Variables are all zero, though.)
+Variables are all zero, though. But only way to test it is to hierarchically
+descend through the expression to the atoms & make sure they're all constants.
+Hm.)
+
+----------
 
 Expression TODO:
-- add/mult to "exp" in Arith/Mult. (in 1.20)
-- classes inherit from LBE::String/Numeric (in 1.20)
-- parse blesses. new returns $obj=$class->parse($self) (in 1.20)
-- If arith. has only one mult. exp., return the ME (in 1.20)
-- LogicalAnd/LogicalOr exps (easy).
-- LBE::Boolean class that LogicalAnd/LogicalOr inherit from. Be careful with
-  string_or_numeric stuff! Actually, Arith/Mult will automatically return
-  Booleans rather than blessing them to A/M so that should be safe. But
-  what about other things that call string_or_numeric? E.g., INT((A>B)).
-  ("int(A>B)" would be an error since Arglist looks for arith. exps. But
-  extra parens would make Unary call Cond.) Should Boolean be an error?
-- Or do we want to get rid of String/Numeric & just move to "type" field?
-  Kind of nice to be able to say new LBE::Foo::Numeric. OTOH, I don't think
-  we're really doing testing right now! E.g., if you look for an
-  LBE::Arithmetic::Numeric, is there any check for that? We may be able
-  to do type checking by examining the class name & testing for 
-  isa String, Numeric or Boolean.
-- Add NOT to rel op
-- add "is_nested" to Unary if parens. (in stuff/Exp_Try). But note that if an Or
-  is in a Unary, we should return the Or so that Rel. Exp. sees it.
-  (Alternatively, Rel. Exp. could test for Unary's "expression" field. (We
-  know we won't have to delve into subexps to find out if it's boolean.) 
-  Or just have a Unary::Boolean class!
-- Unary calls LogicalAnd with "maybe_arithmetic". Which passes it down to
-  Relational. if Relational is called with "maybe", then if there's no
-  rel. op. it just returns the exp., which gets passed through Logicals
-  to Unary again. This handles IF (1+1) > 2
-- If Rel. Exp. gets a Unary that's conditional, it returns it (possibly along
-  with a leading NOT!). (Don't even look for a rel. op. since it would be
-  illegal!) This handles IF NOT (A>B) THEN as well as IF (A>B) AND...
+- change new back to parse and make new just call parse? Then, we
+  can have a Expression::print called from new if debugging.
+
+Need to decide if Iwant these things to inherit from LBE or not. E.g. if
+you say "print 1" then the 'new LBE' will return just an LB Constant. If
+that's not considered an expression, that might be weird. Of course, we're
+already doing that with Functions. Why *shouldn't* they inherit from LBE?
+
+- LB::Constant::Boolean. Its parse or output_perl is an error, since it
+    should only be generated during implementation. 
+- LB::Constant::Boolean::True and ::False. and/or/not methods!
+    use overload?
+- Inherit from LB::Boolean
+- LB::Boolean subclasses are the only things that access these. For anything
+    else, it's an error. LBER::evaluate returns new Boolean::True or False.
+    LBE::And/Or only know how to deal w/ LBCB's, via anding and oring.
+- This makes it very easy to see if we're trying to access TRUE/FALSE like
+    regular values, to print them, etc.
+- new can take a Perl expression, which it evals! Or maybe it's better
+  just to take new of the eval'ed expression.
+
+In fact, why not make LB::Constant::String and LB::Constant::Numeric.
+Or actually, change the currently existing LBE::Constant::*
+Change every field that now holds a string or number to hold an object.
+This allows:
+- overall, gives us more control: we always know exactly what sort of
+  data we're working with.
+- errors when you try to set a Numeric to a String without STR$, e.g.
+  also errors when you try to subtract strings & things. 
+- Might make printing easier. We just tell it print the extra space if you're
+  printing a Numeric.
+- Might it make DATA statements w/ unquoted strings workable? Maybe not.
+- In fact, we could use overload for all these subclasses. If we do, then
+  we no longer need to use perl eval for string comparison in Rel. Exp.
+  (Note: mail cplm & ask if it's a good idea to use it.)
+- evaluate called on an LBC returns the object itself. (I.e. don't return its
+  value, because we want to call print with an LB::Constant, not with a Perl
+  string.) OTOH, I think output_perl needs to output the actual value.
+- We can actually make these objects just be blessed variables, rather than
+  hashes, because they only need to store the text that makes them. Then
+  e.g. &add is just return $$a + $$b
+
+(In theory, Arith/Mult shouldn't have to check for boolean, because Unary will
+exiterror if there is one. Similarly for And/Or. But leave them for
+extra safety?)
+
+----------
+I should really isolate all printing done by the program, to better control
+it (e.g. this will eventually allow printing to a filehandle or something else, 
+simpler testbasic.pl). Basically, we just need a Program::print. (If I ever
+make a print_basic, it would call that.)
+
+----------
 
 If statements also need to suck up stuff if they're multistatements.
 Different BASIC programs I've got seem to allow ELSE right after a
@@ -43,45 +87,8 @@ an ELSE. (It doesn't make sense in a THEN because the ELSE would slurp up the
 other else.) Do we allow that? (If not, make it an error to get a Statement::If
 when "parsing_if" is set!)
 
-Indent in subs created from DEF using same code as main Program::output_perl.
-
-    Note that we may want to parse Input/Data stuff intelligent, e.g. to
+    Note that we may want to parse Input/Data stuff intelligently, e.g. to
 have non-quoted strings. Could we use nexttok with that too?
-
-Can we make all expressions either string, numeric, or logical? Note that
-arithmetic exps need to be string or numeric, since + is handled differently.
-And mult. needs to be s or n so that arith. can inherit its datatype from it.
-Unary, too.  But conditionals are really neither string nor numeric. They have
-string or numeric expressions *in* them (and e.g. both exps need to be the
-same type) but there's really no difference between a string & numeric exp.
-Which means we should be able to get rid of LBE::Conditional::String &
-::Numeric packages, which never need to be used!
-    We're actually going to need LogicalOr and LogicalAnd classes if we
-want to get precedence right. And change Conditional to Relational (not quite
-like C, which separates equality-expression from relational, because in BASIC
-<> and > have the same precedence (and you can't have more than one in a 
-relational expression anyway)). (NOT will be a field for Relationals 
-like the "minus" field for Unary's.)
-    But note that in that Unary expressions can actually be string,
-numeric, OR logical! 
-E.g., (x>2) or (y>1)
-(x>2) is a unary logical exp., which should be passed up the 
-mult. -> arith -> Relational
-chain, so that the LogicalOr object sees that indeed it's Or-ing relational
-exps rather than arithmetic ones.
-    PROBLEM: if we tell Unary that a paren begins an LBE::LogicalOr, then
-even an expression like (3+2) will be a LogicalOr. But it's a LogicalOr that's
-numeric! 
-    Options: (1) have LogicalOr->new return a regular arithmetic if
-that's what it reads, or (2) allow LogicalOrs to be numeric. 
-In the case of (1), we avoid having a gazillion expressions to evaluate just
-to do 2+2. In face, maybe I should do this anyway, including having an
-arithmetic exp. just be Unary + Unary if there aren't actually any mult.
-exp.s in it. For (2), that's actually doable. It just means that Relational
-exps CAN in fact be string, numeric or logical, not just automatically
-logical. (Basically, they'd be string/numeric if they have only one term; same
-for LogicalOr/And. And if a LogicalAnd has two terms but one is numeric,
-that's a BUG. ("x>2 AND 17")
 
 Case insensitivity in strings? 
 
@@ -92,6 +99,37 @@ Better errors. E.g., instead of using die, we should have a different kind
 of error function that says something like "Internal Error on line...". I.e.,
 it'll be useful for us to know what line we're on.
 
+----------
+
+LB::Debug? Or overkill.
+Separate into Parse_Debug and Other_Debug?
+Parse_Debug:
+- print line #
+- print line text
+- print current statement? (Not as easy unless we save statement text.
+     or just print statement type?)
+- print line tokens
+- print expression hierarchy (shorter print version that just prints the exp?)
+Other_Debug:
+- print line #
+- print line text
+- print current statement? (Not as easy unless we save statement text.)
+- print expression as it's being calculated?
+
+LBE::print {
+    print exps[0]
+    foreach (@operators) {print "Operator: $op\n"; print exps[$a++]}
+}
+Lvalue: print varname, args if any
+Unary - print parens if nested. Print expression
+Function
+Arglist
+
+Program should maybe have a "debug" pointer to an LB::Debug object.
+
+LB::Debug::indent/outdent change debugging indent for printing
+expression hierarchy.
+
 ----------------------------------------------------------------------
 Enhancements to BASIC:
 
@@ -100,10 +138,7 @@ new LBE::Constant directly, or call Unary with some flag set s.t. we're
 not allowed to interpret the string as a new variable.
 
 I should have an error if we try to assign a string expression to a numeric
-variable. Similarly, there should be a problem if we're parsing & find a
-string expression when we expect a numeric one. And e.g., Arithmetic
-Expression parser should complain if it finds a mix of numeric and
-string expressions.
+variable. 
 
 ----------------------------------------------------------------------
 BASIC things to implement for The Secret Project:
@@ -115,15 +150,20 @@ or do we need to use \" or something? But then we need to quote \ too!)
 ----------------------------------------------------------------------
 BASIC things to implement for the betterment of mankind:
 More complicated conditional expressions
-: (i.e. several statements in a line)
 Exponentiation
 More functions: ABS, SQR, string functions, etc.
 file read/write
 GET, GET$
 RESTORE
 NEXT I,J
+hex constants
 scientific notation, integer variables
 correct handling of RND.
+
+Note that CLEAR in some dialects means CLS, in others clear all variables!
+RETURN # means return from the gosub, but then immediately goto #
+
+Handle KEY, LOCATE, COLOR, etc. gracefully.
 
 ----------------------------------------------------------------------
 Things we need like a hole in the head (but implemented anyway):
@@ -139,14 +179,17 @@ unsupported commands. In fact, we could overload Exit_Error to output
 storing the original line!)
 
 There should be subs that act exactly like basic PRINT & INPUT, since the
-behavior is kind of complicated. Then just call those subs. (And write
-the subs into the program!) Except that that may be Hard. Can one write a sub
-that handles PRINT "3" differently from PRINT 3? Maybe. E.g., if you're
-printing a numeric variable or a number, then print a space. But the
-complicated part is expressions. How does this sub, which only gets the output
-of $foo->output_perl, know if the '3' that was returned is the string 3 or the
-number 3? I can't imagine how it does. Which means that numeric & string
-Constants can't be differentiated.
+behavior is kind of complicated. E.g. keeping track of print_column. Then just
+call those subs. (And write the subs into the program!) Except that that may be
+Hard. Can one write a sub that handles PRINT "3" differently from PRINT 3?
+Maybe. E.g., if you're printing a numeric variable or a number, then print a
+space. But the complicated part is expressions. How does this sub, which only
+gets the output of $foo->output_perl, know if the '3' that was returned is the
+string 3 or the number 3? I can't imagine how it does. Which means that numeric
+& string Constants can't be differentiated. But I could have
+    print_basic(["n", 3], ["s", "3"]);
+n or s tells it whether the overall expression should be printed w/ a number
+or not.
 
 Better AI to print nicer code.
 * Ugliest thing now may be do loops, which have convoluted code to allow for
@@ -154,8 +197,8 @@ Better AI to print nicer code.
   information it needs in order to decide whether to test for > or <. I
   *could* maybe change the way Next is stored. But it would be convoluted. We
   could always use something like
-      $test_for = sub {$step_for_k < $limit_for_k}, 
-  and then at the end of the loop just test for &$test_for. But it's arguable
+      $test_for = sub {$for_k < $limit_for_k}, 
+  and then at the end of the loop just test &$test_for. But it's arguable
   whether that's less convoluted.
 * Any way to definitely know when to add \n's to separate blocks of code? 
   Maybe I could only leave whitespace if we're not indented? Same with ifs? (In

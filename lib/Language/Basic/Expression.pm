@@ -6,14 +6,14 @@ package Language::Basic::Expression;
 =head1 NAME
 
 Language::Basic::Expression - Package to handle string, numeric, and
-conditional expressions. 
+boolean expressions. 
 
 =head1 SYNOPSIS
 
 See L<Language::Basic> for the overview of how the Language::Basic module
 works. This pod page is more technical.
 
-    # Given an LB::Token::Group, create an expression AND parse it
+    # Given an LB::Token::Group, create an expression I<and> parse it
     my $exp = new LB::Expression::Arithmetic $token_group;
     # What's the value of the expression?
     print $exp->evaluate;
@@ -22,26 +22,146 @@ works. This pod page is more technical.
 
 Expressions are basically the building blocks of Statements, in that every
 BASIC statement is made up of keywords (like GOTO, TO, STEP) and expressions.
-So expressions includes not just the standard arithmetic expressions
-(like 1 + 2), but also lvalues (scalar variables or arrays), functions,
-and constants. See the Syntax file included with the Language::Basic
-distribution for details on the way expressions are built.
+So expressions include not just the standard arithmetic and boolean expressions
+(like 1 + 2), but also lvalues (scalar variables or arrays), functions, and
+constants. See L<Language::Basic::Syntax> for details on the way expressions
+are built.
 
 =head1 DESCRIPTION
+
+BASIC expressions are represented by various objects of subclasses of
+Language::Basic::Expression. Most LB::Expressions are in turn made up of other
+LB::Expressions. For example an LBE::Arithmetic may be made up of two
+LBE::Multiplicative and a "plus". "Atoms" (indivisible LBE's) include
+things like LBE::Constants and LBE::Lvalues (variables).
+
+=cut
+
+use strict;
+use Language::Basic::Common;
+
+# sub-packages
+{
+package Language::Basic::Expression::Logical_Or;
+package Language::Basic::Expression::Logical_And;
+package Language::Basic::Expression::Relational;
+
+package Language::Basic::Expression::Arithmetic;
+package Language::Basic::Expression::Multiplicative;
+package Language::Basic::Expression::Unary;
+
+package Language::Basic::Expression::Lvalue;
+package Language::Basic::Expression::Arglist;
+package Language::Basic::Expression::Function;
+package Language::Basic::Expression::Constant;
+
+package Language::Basic::Expression::Numeric;
+package Language::Basic::Expression::String;
+package Language::Basic::Expression::Boolean;
+}
+
+# No sub new. Each class must have its own
+
+# Most expressions have a "return type" that's String, Boolean, or Numeric.
+# (Arglists don't, since they hold a list of expressions.)
+#
+# An arithmetic expression is a LBE::Arithmetic::Numeric if it's made up
+# of LBE::Multiplicative::Numeric expressions, but LBE::Arithmetic::String
+# if it's got a LBE::Unary::String in it. We never mix
+# expression types (except within Arglists)
+#
+# This sub therefore blesses an object to its String/Numeric/Boolean subclass
+# depending on the type of the sub-expression (and returns the newly blessed
+# object.)
+#
+# Usually the sub-expression is itself an LB::Expression, but not always.
+# We test for subexps of, e.g., LB::String rather than LBE::String,
+# because we may be setting return type based on a LB::Variable::String or
+# LB::Function::String, which aren't LB::Expressions.
+#
+# Arg0 is the thing to bless, arg1 is the subexp
+sub set_return_type {
+    my $self = shift;
+    my $class = ref($self);
+    # If we already are blessed, don't rebless!
+    foreach (qw(String Numeric Boolean)) {
+	return $self if $self->isa("Language::Basic::Expression::$_");
+    }
+
+    my $subexp = shift;
+    my $type; # Return type
+    foreach (qw(String Numeric Boolean)) {
+	# LB::Function::String
+	if ($subexp->isa("Language::Basic::$_")) {
+	    $type = $_;
+	    last;
+	}
+    }
+    unless (defined $type) {die "Error refining $class to ",ref($subexp),"\n";}
+
+    #print "self, class, type is 1 $self 2 $class 3 $type\n";
+    # Note: "$class::$type" breaks!
+    my $subclass = $class . "::$type";
+    # TODO assert that class actually exists! E.g., call
+    # $self->isa(LBE)
+    bless $self, $subclass;
+}
+
+######################################################################
+
+=pod
+
+=head2 The LBE hierarchy
+
+A bunch of LBE subclasses represent various kinds of BASIC expressions.
+These subclasses closely follow the BASIC syntax diagram. 
+
+Expressions can be classified in two ways, which are sort of vertical and
+horizontal. One classification method is what subexpressions (if any) an
+expression is made of. For example, an Arith. Exp. is made up of one or more
+Mult. Exps. connected by plus or minus signs, while a Mult. Exp. is made up of
+one or more Unary Exps. This is a hierarchical (or vertical) distinction,
+important for building up the tree of objects that represent a BASIC
+expression.
+
+(Note that not all levels in the hierarchy have to be filled. We don't
+bother making an Arith. Exp. which contains just one Mult. Exp. which contains
+just one Unary Exp. Instead, we just use the Unary Exp. itself (when it's
+safe to do so!)
+
+The second way of classifying expressions is by their return type. A String
+Exp. is a string constant, a string variable, a string function, or some other
+expression whose value when evaluated will be a string. A Numeric Exp.
+evaluates to a number, and a Boolean to a True or False value.  This
+distinction is important for typechecking and finding syntax errors in BASIC
+code.  (Note that in BASIC -- unlike Perl or C -- you can't "cast" a boolean
+value into an integer or string. This actually makes parsing more difficult.)
+
+Some expressions don't exactly fit any of these distinctions.  For example, an
+Arglist evaluates to a list of expressions, each of which may be Numeric or
+Boolean.
+
+
+=head2 subclass methods
 
 Each subclass has (at least) three methods: 
 
 =over 4
 
-=item parse 
+=item new
 
-takes a Token::Group and eats one or more Tokens from it (or returns undef if
-the string's syntax doesn't match that subclass), setting various fields
-in the object.
+The "new" method takes a class and a Token::Group (and possibly some other
+args).  It eats one or more Tokens from it, parsing them, creating a new object
+of that class I, and setting various fields in that object, which it returns.
+If the tokens don't match the class, "new" returns undef.
+
+If an expression contains just one subexpression often we'll just return the
+subexpression.  So if an Arith. Exp.  contains just one Mult. Exp., we'll just
+return the LBE::Multiplicative object and I<not> an LBE::Arithmetic object.
 
 =item evaluate
 
-actually calculates the value of the expression. For a string
+Actually calculates the value of the expression. For a string
 or numeric constant or variable, that just means taking the stored value
 of that object. For other Expressions, you actually need to do math.
 
@@ -53,74 +173,13 @@ function calls may be even more complicated.
 
 =back
 
-The Expression subclasses closely follow the BASIC grammar. Most subclasses
-can have their own String and Numeric subclasses in turn. This allows us
-to make sure that you don't try to multiply strings together, etc.
+=head2 LBE subclasses
 
-Expression subclasses:
+The hierarchical list of subclasses follows:
 
 =over 4
 
 =cut
-
-use strict;
-use Language::Basic::Common;
-
-# sub-packages
-{
-package Language::Basic::Expression::Conditional;
-package Language::Basic::Expression::Arithmetic;
-package Language::Basic::Expression::Multiplicative;
-package Language::Basic::Expression::Unary;
-package Language::Basic::Expression::Lvalue;
-package Language::Basic::Expression::Arglist;
-package Language::Basic::Expression::Function;
-package Language::Basic::Expression::Constant;
-}
-
-#TODO pod for each class!
-
-# new blesses an empty object to the class you're in, then parses
-# the tokens (whose reference is given in arg1) to populate the object
-# with different fields, depending on the class.
-# The parse subroutine may well call other 'new' subs and return a whole
-# hierarchy of LB::Expressions. Note that this sub is inherited by
-# all the LB::Expression::* subclasses.
-sub new {
-    # important to use shift here, since parse passes any remaining @_
-    my ($class, $token_group) = (shift, shift);
-    my $self = {};
-    bless $self, $class;
-    # parse the expression, returns subclass (or undef for a problem)
-    # Also pass any extra arguments that new got
-    $self->parse($token_group, @_) or return undef; 
-    return $self;
-} # end sub Language::Basic::Expression::new
-
-# An arithmetic expression is a LBE::Arithmetic::String if it's made up
-# of LBE::Multiplicative::String expressions and so on. We never mix
-# expression types (except within an argument list for an array or function.)
-# This sub therefore blesses an object to its String or Numeric subclass
-# depending on the type of the sub-expression (and returns the newly
-# blessed object.)
-# Arg0 is the thing to bless, arg1 is the subexp
-sub string_or_numeric {
-    my $self = shift;
-    my $class = ref($self);
-    # If we already are blessed, don't rebless!
-    return $self if ref($self) =~ /::(String|Numeric)$/;
-
-    my $subexp = shift;
-    ref($subexp) =~ /::(String|Numeric)$/ or 
-        die "Error refining $class to ",ref($subexp),"\n";
-    my $type = $1;
-    #print "self, class, type is 1 $self 2 $class 3 $type\n";
-    # Note: "$class::$type" breaks!
-    my $subclass = $class . "::$type";
-    bless $self, $subclass;
-}
-
-######################################################################
 
 =item Arithmetic
 
@@ -130,34 +189,70 @@ which is the BASIC concatenation operator.)
 
 =cut
 
+# In BASIC, Arithmetic expressions can't contain Boolean expressions.
+# However, parentheses can confuse things.
+# LBE::Relational is one of:
+# (1) LBE::Arithmetic Rel. Op. LBE::Arithmetic
+# (2) (Logical Or)
+# It calls LBE::Arithmetic::new with "maybe_boolean" sometimes, to tell
+# LBEA::new that if it finds a (parenthesized) Boolean expression, it's
+# just case #2 above. (Otherwise, a Boolean subexpression is an error.)
 {
 package Language::Basic::Expression::Arithmetic;
 @Language::Basic::Expression::Arithmetic::ISA = qw(Language::Basic::Expression);
+use Language::Basic::Common;
 
-sub parse {
+sub new {
 # The while loop is necessary in case we have an expression like 1+2+3 
 # It will effectively evaluate the +, - operators left to right 
-    my $self = shift;
+    my $class = shift;
     my $token_group = shift;
-    my (@adds, @ops);
+    my $maybe_boolean = shift;
+    if (defined($maybe_boolean) && $maybe_boolean ne "maybe_boolean") {
+	Exit_Error("Internal Error: Weird arg '$maybe_boolean' to LBE::Arithmetic::new");
+    }
 
-    my $add = new Language::Basic::Expression::Multiplicative $token_group;
-    push @adds, $add;
+    my $exp = new Language::Basic::Expression::Multiplicative 
+	($token_group, $maybe_boolean);
+    if ($exp->isa("Language::Basic::Expression::Boolean")) {
+        if ($maybe_boolean) {
+	    return $exp;
+	} else {
+	    Exit_Error("Syntax Error: Expected non-Boolean Expression!");
+	}
+    }
+
+    my (@exps, @ops);
+    push @exps, $exp;
     while (defined (my $tok = 
 	    $token_group->eat_if_class("Arithmetic_Operator"))) {
 	push @ops, $tok->text;
-	$add = new Language::Basic::Expression::Multiplicative $token_group;
-	push @adds, $add;
+	$exp = new Language::Basic::Expression::Multiplicative $token_group;
+	if ($exp->isa("Language::Basic::Expression::Boolean")) {
+	    Exit_Error("Syntax Error: Expected non-Boolean Expression!");
+	}
+	push @exps, $exp;
     } # end while
 
-    $self->{"expressions"} = \@adds;
+    # Don't bother making an Arith. Exp. object if there's just one Mult. Exp.
+    # Return the Mult. Exp. instead.
+    return $exp unless @ops;
+
+    # Otherwise, we want to create the Arith. Exp.
+    my $self = {};
+    $self->{"expressions"} = \@exps;
     $self->{"operations"} = \@ops;
+    bless $self, $class;
+
     # Bless to LBEA::String or Numeric
-    $self->string_or_numeric($add);
-} # end sub Language::Basic::Expression::Arithmetic::parse
+    $self->set_return_type($exp);
+    return $self;
+} # end sub Language::Basic::Expression::Arithmetic::new
 
 package Language::Basic::Expression::Arithmetic::String;
-@Language::Basic::Expression::Arithmetic::String::ISA = qw(Language::Basic::Expression::Arithmetic);
+@Language::Basic::Expression::Arithmetic::String::ISA = 
+    qw(Language::Basic::Expression::Arithmetic
+       Language::Basic::Expression::String);
 
 sub evaluate {
     my $self = shift;
@@ -165,16 +260,16 @@ sub evaluate {
     # Ops ought to be all pluses, since that's all BASIC can do.
     my @ops = @{$self->{"operations"}};
 
-    my $add = (shift @exps)->evaluate;
+    my $exp = (shift @exps)->evaluate;
     while (my $op = shift @ops) {
-	my $add2 = (shift @exps)->evaluate;
+	my $exp2 = (shift @exps)->evaluate;
 	if ($op eq '+') {
-	    $add .= $add2;
+	    $exp .= $exp2;
 	} else {
 	    die "Unknown op in LBE::Arithmetic::String::evaluate!\n";
 	}
     } # end while
-    return($add);
+    return($exp);
 } # end sub Language::Basic::Expression::Arithmetic::String::evaluate
 
 sub output_perl {
@@ -195,24 +290,25 @@ sub output_perl {
 } # end sub Language::Basic::Expression::Arithmetic::String::output_perl
 
 package Language::Basic::Expression::Arithmetic::Numeric;
-@Language::Basic::Expression::Arithmetic::Numeric::ISA = qw(Language::Basic::Expression::Arithmetic);
+@Language::Basic::Expression::Arithmetic::Numeric::ISA = 
+    qw(Language::Basic::Expression::Arithmetic
+       Language::Basic::Expression::Numeric);
 
 sub evaluate {
     my $self = shift;
     my @exps = @{$self->{"expressions"}};
     my @ops = @{$self->{"operations"}};
 
-    my $add = (shift @exps)->evaluate;
+    my $exp = (shift @exps)->evaluate;
     while (my $op = shift @ops) {
-	my $add2 = (shift @exps)->evaluate;
-	#print "eval_add: $add $op $add2\n";
+	my $exp2 = (shift @exps)->evaluate;
 	if ($op eq '+') {
-	    $add = $add + $add2;
+	    $exp = $exp + $exp2;
 	} else { # minus
-	    $add = $add - $add2;
+	    $exp = $exp - $exp2;
 	}
     } # end while
-    return($add);
+    return($exp);
 } # end sub Language::Basic::Expression::Arithmetic::Numeric::evaluate
 
 sub output_perl {
@@ -232,54 +328,76 @@ sub output_perl {
 
 =item Multiplicative
 
-a set of unary expressions connected by '*' or '/'.  A String multiplicative
-expression is just a String unary expression.
+a set of unary expressions connected by '*' or '/'.  
 
 =cut
 
 {
 package Language::Basic::Expression::Multiplicative;
 @Language::Basic::Expression::Multiplicative::ISA = qw(Language::Basic::Expression);
+use Language::Basic::Common;
 
-sub parse {
-# Note that String unary expressions can't multiply or divide, but it doesn't
-# really matter
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
-    my (@mults, @ops);
+    my $maybe_boolean = shift;
+    if (defined($maybe_boolean) && $maybe_boolean ne "maybe_boolean") {
+	Exit_Error("Internal Error: Weird arg '$maybe_boolean' to LBE::Multiplicative::new");
+    }
 
-    my $mult = new Language::Basic::Expression::Unary $token_group;
-    push @mults, $mult;
+    my $exp = new Language::Basic::Expression::Unary 
+	($token_group, $maybe_boolean);
+    if ($exp->isa("Language::Basic::Expression::Boolean")) {
+        if ($maybe_boolean) {
+	    return $exp;
+	} else {
+	    Exit_Error("Syntax Error: Expected non-Boolean Expression!");
+	}
+    }
+
+    my (@exps, @ops);
+    push @exps, $exp;
     while (defined (my $tok = 
 	    $token_group->eat_if_class("Multiplicative_Operator"))) {
 	push @ops, $tok->text;
-	$mult = new Language::Basic::Expression::Unary $token_group;
-	push @mults, $mult;
+	$exp = new Language::Basic::Expression::Unary $token_group;
+	if ($exp->isa("Language::Basic::Expression::Boolean")) {
+	    Exit_Error("Syntax Error: Expected non-Boolean Expression!");
+	}
+	push @exps, $exp;
     } # end while
 
-    $self->{"expressions"} = \@mults;
+    # Don't bother making a Mult. Exp. object if there's just one Unary Exp.
+    # Return the Unary Exp. instead.
+    # Note that this will definitely happen if $exp is a String.
+    return $exp unless @ops;
+
+    # Otherwise, we want to create the Mult. Exp.
+    my $self = {};
+    $self->{"expressions"} = \@exps;
     $self->{"operations"} = \@ops;
+    bless $self, $class;
 
     # Bless to LBEM::String or Numeric
-    $self->string_or_numeric($mult);
-} # end sub Language::Basic::Expression::Multiplicative::parse
+    $self->set_return_type($exp);
+    return $self;
+} # end sub Language::Basic::Expression::Multiplicative::new
 
 sub evaluate {
     my $self = shift;
     my @exps = @{$self->{"expressions"}};
     my @ops = @{$self->{"operations"}};
 
-    my $mult = (shift @exps)->evaluate;
+    my $exp = (shift @exps)->evaluate;
     while (my $op = shift @ops) {
-	my $mult2 = (shift @exps)->evaluate;
-	#print "eval_mult: $mult $op $mult2\n";
+	my $exp2 = (shift @exps)->evaluate;
 	if ($op eq '*') {
-	    $mult = $mult * $mult2;
+	    $exp = $exp * $exp2;
 	} else {
-	    $mult = $mult / $mult2;
+	    $exp = $exp / $exp2;
 	}
     } # end while
-    return($mult);
+    return($exp);
 } # end sub Language::Basic::Expression::Multiplicative::evaluate
 
 sub output_perl {
@@ -297,9 +415,11 @@ sub output_perl {
 
 # Sub packages
 package Language::Basic::Expression::Multiplicative::Numeric;
-@Language::Basic::Expression::Multiplicative::Numeric::ISA = qw(Language::Basic::Expression::Multiplicative);
-package Language::Basic::Expression::Multiplicative::String;
-@Language::Basic::Expression::Multiplicative::String::ISA = qw(Language::Basic::Expression::Multiplicative);
+@Language::Basic::Expression::Multiplicative::Numeric::ISA = 
+    qw(Language::Basic::Expression::Multiplicative
+       Language::Basic::Expression::Numeric);
+# Note that there can't possibly be an LBEM::String. LBEM::new will just 
+# return an LBE::Unary, since there are no string multiplying ops to find.
 } # end package Language::Basic::Expression::Multiplicative
 
 =item Unary
@@ -314,24 +434,50 @@ package Language::Basic::Expression::Unary;
 @Language::Basic::Expression::Unary::ISA = qw(Language::Basic::Expression);
 use Language::Basic::Common;
 
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
+    # Fields:
+    #     nested	This Expression contains a parenthesized exp.
+    #     minus		This Exp. has a unary minus in front of it
+    my $self = { 
+        "nested" => "",
+	"minus" => "",
+    };
+
+    # If we're inside a Relational Exp., then a parenthetical exp. may
+    # be either Boolean or non-Boolean. Otherwise, it has to be non-Boolean
+    my $maybe_boolean = shift;
+    if (defined($maybe_boolean) && $maybe_boolean ne "maybe_boolean") {
+	Exit_Error("Internal Error: Weird arg '$maybe_boolean' to LBE::Unary::new");
+    }
+
+    # unary minus in the expression?
+    $self->{"minus"} = 1 if defined($token_group->eat_if_string("-"));
 
     my $unary;
     my $try;
-
-    # unary minus in the expression?
-    $self->{"minus"} = defined($token_group->eat_if_string("-"));
-
     # if a parentheses, (recursively) parse what's inside
+    # If $maybe_boolean, then a paren'ed expression might be a Boolean exp., 
+    # so call LBE::Logical_Or (highest level Boolean exp.)
+    # However, in most cases, it'll be a non-Boolean, so call with
+    # "maybe_arithmetic" flag, which tells LBE::LO not to be surprised
+    # if it finds an arithmetic exp.
     if (defined($token_group->eat_if_class("Left_Paren"))) {
-	$unary = new Language::Basic::Expression::Arithmetic $token_group;
+	$self->{"nested"} = 1;
+	$try = new Language::Basic::Expression::Logical_Or 
+	    ($token_group, "maybe_arithmetic");
 	# Skip End Paren
 	defined($token_group->eat_if_class("Right_Paren")) or
 	     Exit_Error("Expected ')' to match '('!");
+	# if we found a Boolean, make sure we're allowed to have one.
+	if ($try->isa("Language::Basic::Expression::Boolean") && 
+		!$maybe_boolean) {
+	    Exit_Error("Syntax Error: Expected non-Boolean Expression!");
+	}
+	$unary = $try
 
-    # OR it's a function
+    # OR it's a String or Numeric function
     # NOTE that LBEF::new had better not eat the word if it returns undef!
     } elsif (defined ($try = 
 	    new Language::Basic::Expression::Function $token_group)) {
@@ -353,13 +499,20 @@ sub parse {
 	    Exit_Error("Found nothing when expected Unary Expression!");
         Exit_Error("Unknown unary expression starts with '", $tok->text,"'");
     }
-
-    $self->{"expression"} = $unary;
     #print "unary ref is ",ref($unary),"\n";
 
-    # Bless to LBEU::String or Numeric
-    $self->string_or_numeric($unary);
-} # end eval_unary
+    # If it's just an Lvalue, say, then return the Lvalue object rather
+    # than making a Unary out of it. Can't do that if we're nested or minused.
+    if ($self->{"nested"} || $self->{"minus"}) {
+	$self->{"expression"} = $unary;
+	bless $self, $class;
+	# Bless to LBEU::String or Numeric or Boolean
+	$self->set_return_type($unary);
+	return $self;
+    } else {
+        return $unary;
+    }
+} # end Language::Basic::Expression::Unary::new
 
 sub evaluate {
     my $self = shift;
@@ -375,7 +528,7 @@ sub output_perl {
     my $ret = $self->{"minus"} ?  "-" : "";
     my $exp = $self->{"expression"};
     my $out = $exp->output_perl;
-    if ($exp->isa("Language::Basic::Expression::Arithmetic")) {
+    if ($self->{"nested"}) {
         $out = "(" . $out . ")";
     }
     $ret .= $out;
@@ -384,9 +537,17 @@ sub output_perl {
 
 # Sub packages
 package Language::Basic::Expression::Unary::Numeric;
-@Language::Basic::Expression::Unary::Numeric::ISA = qw(Language::Basic::Expression::Unary);
+@Language::Basic::Expression::Unary::Numeric::ISA = 
+    qw(Language::Basic::Expression::Unary
+       Language::Basic::Expression::Numeric);
 package Language::Basic::Expression::Unary::String;
-@Language::Basic::Expression::Unary::String::ISA = qw(Language::Basic::Expression::Unary);
+@Language::Basic::Expression::Unary::String::ISA = 
+    qw(Language::Basic::Expression::Unary
+       Language::Basic::Expression::String);
+package Language::Basic::Expression::Unary::Boolean;
+@Language::Basic::Expression::Unary::Boolean::ISA = 
+    qw(Language::Basic::Expression::Unary
+       Language::Basic::Expression::Boolean);
 } # end package Language::Basic::Expression::Unary
 
 ######################################################################
@@ -402,13 +563,8 @@ package Language::Basic::Expression::Constant;
 @Language::Basic::Expression::Constant::ISA = qw(Language::Basic::Expression);
 
 # Returns a LBE::Constant::* subclass or undef
-# TODO this totally sucks. Because of the complicatedness of the new/parse
-# scheme, we have to cannibalize the returned LBEC::* object and
-# call string_or_numeric, rather than just returning that object.
-# Maybe LBE::new should say "$self = $self->parse". That would require
-# having all the other parse subs return self, but that's doable.
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
     my ($const, $try);
     if (defined ($try = 
@@ -421,50 +577,51 @@ sub parse {
         return undef;
     }
 
-    $self->{"value"} = $const->{"value"};
-    $self->string_or_numeric($const);
-} # end Language::Basic::Expression::Constant::parse
+    return $const;
+} # end Language::Basic::Expression::Constant::new
 
 sub evaluate {return shift->{"expression"}->evaluate; }
 
 package Language::Basic::Expression::Constant::Numeric;
-@Language::Basic::Expression::Constant::Numeric::ISA = qw(Language::Basic::Expression::Constant);
+@Language::Basic::Expression::Constant::Numeric::ISA = 
+    qw(Language::Basic::Expression::Constant
+       Language::Basic::Expression::Numeric);
 
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
     if (defined (my $tok = 
             $token_group->eat_if_class("Numeric_Constant"))) {
-	$self->{"value"} = $tok->text + 0;
+	my $self = {"value" => $tok->text + 0};
+	bless $self, $class; # and return it
     } else {
         return undef;
     }
-    # Otherwise, if value is empty string, returning it confuses LBE::new
-    return $self;
-} # end sub Language::Basic::Expression::Constant::Numeric::parse
+} # end sub Language::Basic::Expression::Constant::Numeric::new
 
 sub evaluate { return shift->{"value"} }
 
 sub output_perl {return shift->{"value"}}
 
 package Language::Basic::Expression::Constant::String;
-@Language::Basic::Expression::Constant::String::ISA = qw(Language::Basic::Expression::Constant);
+@Language::Basic::Expression::Constant::String::ISA = 
+    qw(Language::Basic::Expression::Constant
+       Language::Basic::Expression::String);
 
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
     if (defined (my $tok = 
             $token_group->eat_if_class("String_Constant"))) {
 	(my $text = $tok->text) =~ s/^"(.*?)"/$1/;
-	$self->{"value"} = $text;
+	my $self = {"value" => $text};
+	bless $self, $class; # and return it
     } else {
 	# TODO handle unquoted string for Input, Data statements
 	warn "Currently only understand quoted strings for String Constant";
         return undef;
     }
-    # Otherwise, if value is empty string, returning it confuses LBE::new
-    return $self;
-} # end sub Language::Basic::Expression::Constant::String::parse
+} # end sub Language::Basic::Expression::Constant::String::new
 
 sub evaluate { return shift->{"value"} }
 
@@ -498,9 +655,13 @@ use Language::Basic::Common;
 # Sub-packages
 {
 package Language::Basic::Expression::Lvalue::Numeric;
-@Language::Basic::Expression::Lvalue::Numeric::ISA = qw(Language::Basic::Expression::Lvalue);
+@Language::Basic::Expression::Lvalue::Numeric::ISA = 
+    qw(Language::Basic::Expression::Lvalue
+       Language::Basic::Expression::Numeric);
 package Language::Basic::Expression::Lvalue::String;
-@Language::Basic::Expression::Lvalue::String::ISA = qw(Language::Basic::Expression::Lvalue);
+@Language::Basic::Expression::Lvalue::String::ISA = 
+    qw(Language::Basic::Expression::Lvalue
+       Language::Basic::Expression::String);
 }
 
 # Fields:
@@ -508,9 +669,11 @@ package Language::Basic::Expression::Lvalue::String;
 #        that it does NOT ref a particular cell in an LBV::Array object!
 #    arglist - a set of Arithmetic Expressions describing which exact cell
 #        in an LBV::Array to get. undef for a LBV::Scalar
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
+    my $self = {};
+
     defined (my $tok = 
 	    $token_group->eat_if_class("Identifier")) or
 	    return undef;
@@ -530,9 +693,11 @@ sub parse {
     $self->{"varptr"} = $var;
     $self->{"name"} = $name;
 
+    bless $self, $class;
     # Is it a string or numeric lvalue?
-    $self->string_or_numeric($var);
-} # end sub Language::Basic::Expression::Lvalue::parse
+    $self->set_return_type($var);
+    return $self;
+} # end sub Language::Basic::Expression::Lvalue::new
 
 sub evaluate { 
     my $self = shift;
@@ -594,17 +759,23 @@ use Language::Basic::Common;
 # Sub-packages
 {
 package Language::Basic::Expression::Function::Numeric;
-@Language::Basic::Expression::Function::Numeric::ISA = qw(Language::Basic::Expression::Function);
+@Language::Basic::Expression::Function::Numeric::ISA = 
+    qw(Language::Basic::Expression::Function
+       Language::Basic::Expression::Numeric);
 package Language::Basic::Expression::Function::String;
-@Language::Basic::Expression::Function::String::ISA = qw(Language::Basic::Expression::Function);
+@Language::Basic::Expression::Function::String::ISA = 
+    qw(Language::Basic::Expression::Function
+       Language::Basic::Expression::String);
 }
 
 # Arg0, Arg1 are the object and a ref to the string being parsed, as usual.
 # Arg2, if it exists, says we're in a DEF statement, so that if the
 # function doesn't exist, we should create it rather than returning undef.
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
+    my $self = {};
+
     # Don't eat it if it's not a true function name (could be an lvalue)
     my $tok = $token_group->lookahead;
     return undef unless $tok->isa("Language::Basic::Token::Identifier");
@@ -618,7 +789,7 @@ sub parse {
     my $func;
     if ($defining) {
 	# TODO should this check be somewhere else, so that we can
-	# give a more descriptive error message in Statement::Def::parse?
+	# give a more descriptive error message in Statement::Def::new?
 	return undef unless $name =~ /^FN/;
         $func = new Language::Basic::Function::Defined $name;
     } else {
@@ -658,15 +829,17 @@ sub parse {
 	$self->{"arglist"} = $arglist;
     }
 
+    bless $self, $class;
     # Is it a string or numeric Function?
-    $self->string_or_numeric($func);
-} # end sub Language::Basic::Expression::Function::parse
+    $self->set_return_type($func);
+    return $self;
+} # end sub Language::Basic::Expression::Function::new
 
 sub evaluate { 
     my $self = shift;
     my $func = $self->{"function"};
     my $arglist = $self->{"arglist"};
-    # Note we tested number & type of args in parse
+    # Note we tested number & type of args in new
     my @args = $arglist->evaluate;
     my $value = $func->evaluate(@args);
     return $value;
@@ -703,9 +876,10 @@ package Language::Basic::Expression::Arglist;
 @Language::Basic::Expression::Arglist::ISA = qw(Language::Basic::Expression);
 use Language::Basic::Common;
 
-sub parse {
-    my $self = shift;
+sub new {
+    my $class = shift;
     my $token_group = shift;
+    my $self = {};
 
     # Has to start with paren
     defined($token_group->eat_if_class("Left_Paren")) or
@@ -724,7 +898,8 @@ sub parse {
     unless (@args) {Exit_Error("Empty argument list ().")}
 
     $self->{"arguments"} = \@args;
-} # end sub Language::Basic::Expression::Arglist::parse
+    bless $self, $class;
+} # end sub Language::Basic::Expression::Arglist::new
 
 # Returns a LIST of values
 sub evaluate {
@@ -742,32 +917,236 @@ sub output_perl {
 } # end package Language::Basic::Expression::Arglist
 
 ######################################################################
+# Boolean stuff
+# Booleans don't care whether the stuff in them is String or Numeric,
+# so no sub-packages are needed.
 
-=item Arglist
+=item Logical_Or
 
-A conditional expression, like "A>B+C". Note that in BASIC, (unlike Perl or 
-C) you can't change a conditional expression into an integer or string.
+a set of Logical_And expressions connected by "OR"
+
+=cut
+
+# In BASIC, Boolean expressions can't contain non-Boolean expressions
+# except for Relational Exps. (which have two Arithmetic Exps. separated by
+# a Rel. Op.)
+# However, parentheses can confuse things.
+# LBE::Unary is one of:
+# (1) A constant, variable, function, etc.
+# (2) (Arithmetic Exp.)
+# (3) (Logical Or)
+# Unary::new calls LBE::Logical_Or::new with "maybe_arithmetic" sometimes, to 
+# tell LBELO::new that if it finds a (parenthesized) non-Boolean expression, 
+# it's just case #2 above. (Otherwise, a non-Boolean subexpression is an error.)
+{
+package Language::Basic::Expression::Logical_Or;
+@Language::Basic::Expression::Logical_Or::ISA = 
+    qw(Language::Basic::Expression::Boolean);
+use Language::Basic::Common;
+
+sub new {
+    # No "operators" field is necessary since operators must all be "OR"
+    my $class = shift;
+    my $token_group = shift;
+    my $maybe_arithmetic = shift;
+    if (defined($maybe_arithmetic) && $maybe_arithmetic ne "maybe_arithmetic") {
+	Exit_Error("Internal Error: Weird arg '$maybe_arithmetic' to LBE::Logical_Or::new");
+    }
+
+    my $exp = new Language::Basic::Expression::Logical_And 
+	($token_group, $maybe_arithmetic); # TODO ... or Error...
+    if (! $exp->isa("Language::Basic::Expression::Boolean")) {
+        if ($maybe_arithmetic) {
+	    return $exp;
+	} else {
+	    Exit_Error("Syntax Error: Expected Boolean Expression");
+	}
+    }
+
+    my @exps;
+    push @exps, $exp;
+    while (defined ($token_group->eat_if_string("OR"))) {
+	$exp = new Language::Basic::Expression::Logical_And $token_group;
+	if (! $exp->isa("Language::Basic::Expression::Boolean")) {
+	    Exit_Error("Syntax Error: Expected Boolean Expression!");
+	}
+	push @exps, $exp;
+    } # end while
+
+    # Don't bother making a Logical_Or object if there's just one Logical_And
+    return $exp if @exps == 1;
+
+    # Otherwise, we want to create the Logical_Or
+    my $self = {"expressions" => \@exps};
+    bless $self, $class;
+} # end sub Language::Basic::Expression::Logical_Or::new
+
+sub evaluate {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+
+    my $exp = (shift @exps)->evaluate;
+    # TODO stop calculating when we find a true one?
+    while (defined(my $exp2 = shift @exps)) {
+	$exp = $exp || $exp2->evaluate;
+    } # end while
+    return($exp);
+} # end sub Language::Basic::Expression::Logical_Or::evaluate
+
+sub output_perl {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+
+    my $ret = (shift @exps)->output_perl;
+    while (defined(my $exp = shift @exps)) {
+	$ret .= " || " . $exp->output_perl;
+    } # end while
+    return($ret);
+} # end sub Language::Basic::Expression::Logical_Or::output_perl
+
+} # end package Language::Basic::Expression::Logical_Or
+
+=item Logical_And
+
+a set of Relational expressions connected by "AND"
 
 =cut
 
 {
-package Language::Basic::Expression::Conditional;
-@Language::Basic::Expression::Conditional::ISA = qw(Language::Basic::Expression);
+package Language::Basic::Expression::Logical_And;
+@Language::Basic::Expression::Logical_And::ISA = 
+    qw(Language::Basic::Expression::Boolean);
 use Language::Basic::Common;
 
-sub parse {
-    my ($self, $token_group) = @_;
-    my $e1 = new Language::Basic::Expression::Arithmetic $token_group or
-        Exit_Error("Unexpected text at beginning of Cond. Exp.");
+sub new {
+    # No "operators" field is necessary since operators must all be "AND"
+    my $class = shift;
+    my $token_group = shift;
+    my $maybe_arithmetic = shift;
+    if (defined($maybe_arithmetic) && $maybe_arithmetic ne "maybe_arithmetic") {
+	Exit_Error("Internal Error: Weird arg '$maybe_arithmetic' to LBE::Logical_And::new");
+    }
 
-    defined (my $tok = $token_group->eat_if_class("Relational_Operator")) 
-	or Exit_Error("No Rel. Op. in Conditional Exp.");
+    my $exp = new Language::Basic::Expression::Relational 
+	($token_group, $maybe_arithmetic);
+    if (! $exp->isa("Language::Basic::Expression::Boolean")) {
+        if ($maybe_arithmetic) {
+	    return $exp;
+	} else {
+	    Exit_Error("Syntax Error: Expected Boolean Expression!");
+	}
+    }
+
+    my @exps;
+    push @exps, $exp;
+    while (defined ($token_group->eat_if_string("AND"))) {
+	$exp = new Language::Basic::Expression::Relational $token_group;
+	if (! $exp->isa("Language::Basic::Expression::Boolean")) {
+	    Exit_Error("Syntax Error: Expected Boolean Expression!");
+	}
+	push @exps, $exp;
+    } # end while
+
+    # Don't bother making a Logical_And object if there's just one Relational
+    return $exp if @exps == 1;
+
+    # Otherwise, we want to create the Logical_And
+    my $self = {"expressions" => \@exps};
+    bless $self, $class;
+} # end sub Language::Basic::Expression::Logical_And::new
+
+sub evaluate {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+
+    my $exp = (shift @exps)->evaluate;
+    # TODO stop calculating when we find a true one?
+    while (defined(my $exp2 = shift @exps)) {
+	$exp = $exp && $exp2->evaluate;
+    } # end while
+    return($exp);
+} # end sub Language::Basic::Expression::Logical_And::evaluate
+
+sub output_perl {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+
+    my $ret = (shift @exps)->output_perl;
+    while (defined(my $exp = shift @exps)) {
+	$ret .= " && " . $exp->output_perl;
+    } # end while
+    return($ret);
+} # end sub Language::Basic::Expression::Logical_And::output_perl
+
+} # end package Language::Basic::Expression::Logical_And
+
+=item Relational
+
+A relational expression, like "A>B+C", optionally with a NOT in front of it.
+
+=cut
+
+{
+package Language::Basic::Expression::Relational;
+@Language::Basic::Expression::Relational::ISA = 
+    qw(Language::Basic::Expression::Boolean);
+use Language::Basic::Common;
+
+# Usually, an LBE::Relational is just LBE::Arithmetic Rel. Op. LBE::Arithmetic
+# However, if the first sub-expression in the LBE::Relational is parenthesized,
+# it could be either
+# (1) (Logical Or Exp.)  --- E.g. IF (A>B OR C>D) THEN...
+# (2) (Arith. Exp.) --- E.g. IF (A+1)>B THEN...
+# So we call the first LBE::Arithmetic::new with "maybe_boolean", so that
+# it knows it may find a Boolean sub-expression
+# Note that in case (1), we don't need to look for a Rel. Op., because
+# IF (A>B OR C>D) > 2 is illegal.
+#
+# Rel. Exp. usually has two expressions in the "expressions" field, and
+# an operator in the "operator" field. However, in case (1) above, there will
+# only be one (Boolean) expression, and no op.
+
+sub new {
+    my ($class, $token_group) = (shift, shift);
+    my $self = {};
+    my $maybe_arithmetic = shift;
+    if (defined($maybe_arithmetic) && $maybe_arithmetic ne "maybe_arithmetic") {
+	Exit_Error("Internal Error: Weird arg '$maybe_arithmetic' to LBE::Relational::new");
+    }
+
+    # "NOT" in the expression?
+    $self->{"not"} = defined($token_group->eat_if_string("NOT"));
+
+    my $e = new Language::Basic::Expression::Arithmetic 
+        ($token_group, "maybe_boolean")
+        or Exit_Error("Unexpected text at beginning of Rel. Exp.");
+    push @{$self->{"expressions"}}, $e;
+
+    # Did we find a parenthesized Boolean exp? Then just return it.
+    # Don't even look for a rel. op. since it would be illegal! 
+    if ($e->isa("Language::Basic::Expression::Boolean")) {
+        # TODO return $e instead of blessing unless self->not?
+	bless $self, $class;
+	return $self;
+    }
+
+    # Read the Rel. Op. 
+    my $tok;
+    if (!defined ($tok = $token_group->eat_if_class("Relational_Operator"))) {
+	# Found a parenthesized Arithmetic Exp.?
+        if ($maybe_arithmetic) {
+	    return $e; # Don't bother blessing & returning $self
+	} else {
+	    Exit_Error("Syntax Error: No Relational Operator in Rel. Exp.");
+	}
+    }
+
     my $op = $tok->text;
 
+    # Note: $e2 isn't allowed to be arithmetic, so no maybe_arithmetic arg
     my $e2 = new Language::Basic::Expression::Arithmetic $token_group or
-        Exit_Error("Unexpected text in Cond. Exp. after '$op'");
-    $self->{"exp1"} = $e1;
-    $self->{"exp2"} = $e2;
+        Exit_Error("Unexpected text in Rel. Exp. after '$op'");
+    push @{$self->{"expressions"}}, $e2;
 
     # Convert BASIC ops to perlops
     my $num_op = {
@@ -786,56 +1165,86 @@ sub parse {
 	"<=" => "le",
 	"<>" => "ne",
     };
-    my $trans = (ref($e1) =~ /String/ ? $string_op : $num_op);
+    my $trans = ($e->isa("Language::Basic::Expression::String")
+        ? $string_op : $num_op);
     my $perlop = $trans->{$op} or Exit_Error("Unrecognized Rel. op. '$op'");
-    $self->{"op"} = $perlop;
-    
-    # Is conditional String or Numeric? Figure out from its exps
-    Exit_Error("Expressions in conditional must be the same type!") unless
-        ref($e1) eq ref($e2);
-    $self->string_or_numeric($e1);
-} # end sub Language::Basic::Expression::new
+    $self->{"operator"} = $perlop;
+    bless $self, $class;
+} # end sub Language::Basic::Expression::Relational::new
 
 sub evaluate {
+# If this Rel. Exp. has a nested Boolean Exp. inside it, then just
+# evaluate that (and NOT it if nec.)
+# Otherwise, evaluate the two sides of the Rel. Exp. (each is non-Boolean
+# exp -- either they're both arithmetic or they're both string) and
+# compare them.
     my $self = shift;
 
-    # Evaluate the two sides of the conditional (each is an expression--
-    # either they're both arithmetic or they're both string).
-    my $exp1 = $self->{"exp1"};
-    my $exp2 = $self->{"exp2"};
-    my $e1 = $exp1->evaluate;
-    my $e2 = $exp2->evaluate;
+    my @exps = @{$self->{"expressions"}};
+    my $exp = shift @exps;
+    my $e = $exp->evaluate;
+    my $value;
+    if (! $exp->isa("Language::Basic::Expression::Boolean")) {
+	my $exp2 = shift @exps;
+	my $e2 = $exp2->evaluate;
 
-    my $perlop = $self->{"op"};
-    # I'm vainly hoping that Perl eval will get the same result BASIC would
-    # Need to use \Q in case we say IF A$ = "\", which should really compare
-    # with \\.
-    my $perlexp = join ("", "\"\Q$e1\E\" ", $perlop . " \"\Q$e2\E\"");
-    my $value = eval $perlexp;
-    #print "exp is '$perlexp', value is '$value'\n";
+	my $perlop = $self->{"operator"};
+	# I'm vainly hoping that Perl eval will get the same result BASIC would
+	# Need to use \Q in case we say IF A$ = "\", which should really compare
+	# with \\.
+	my $perlexp = "\"\Q$e\E\" " . $perlop . " \"\Q$e2\E\"";
+	$value = eval $perlexp;
+	#print "exp is '$perlexp', value is '$value'\n";
+
+    } else { # exp has a nested Boolean Exp. in it. There is no exp2
+        $value = $e;
+    }
     
+    $value = !$value if $self->{"not"};
     return $value;
-} # end sub Language::Basic::Expression::Conditional::evaluate
+} # end sub Language::Basic::Expression::Relational::evaluate
 
 sub output_perl {
     my $self = shift;
-    my $exp1 = $self->{"exp1"};
-    my $exp2 = $self->{"exp2"};
-    my $e1 = $exp1->output_perl;
-    my $e2 = $exp2->output_perl;
+    my @exps = @{$self->{"expressions"}};
+    my $exp = shift @exps;
+    my $e = $exp->output_perl;
 
-    my $perlop = $self->{"op"};
-    my $ret = join(" ",$e1, $perlop, $e2);
+    my $ret;
+    # "Normal" Rel. Exp., or nested Boolean exp.?
+    if (! $exp->isa("Language::Basic::Expression::Boolean")) {
+	my $exp2 = shift @exps;
+	my $e2 = $exp2->output_perl;
+
+	my $perlop = $self->{"operator"};
+        $ret = join(" ",$e, $perlop, $e2);
+    } else {
+        $ret = $e;
+    }
+
+    if ($self->{"not"}) {
+	# Don't add parens if it's already paren'd
+        $ret = "(" . $ret . ")" unless $ret =~ /^\(.*\)$/;
+	$ret = "!" . $ret;
+    }
 
     return($ret);
-} # end sub Language::Basic::Expression::Conditional::output_perl
+} # end sub Language::Basic::Expression::Relational::output_perl
 
-# Sub packages
-package Language::Basic::Expression::Conditional::Numeric;
-@Language::Basic::Expression::Conditional::Numeric::ISA = qw(Language::Basic::Expression::Conditional);
-package Language::Basic::Expression::Conditional::String;
-@Language::Basic::Expression::Conditional::String::ISA = qw(Language::Basic::Expression::Conditional);
-} # end package Language::Basic::Expression::Conditional
+} # end package Language::Basic::Expression::Relational
+
+{
+# set ISA for "return type" classes
+package Language::Basic::Expression::Numeric;
+@Language::Basic::Expression::Numeric::ISA = qw
+    (Language::Basic::Expression Language::Basic::Numeric);
+package Language::Basic::Expression::String;
+@Language::Basic::Expression::String::ISA = qw
+    (Language::Basic::Expression Language::Basic::String);
+package Language::Basic::Expression::Boolean;
+@Language::Basic::Expression::Boolean::ISA = qw
+    (Language::Basic::Expression Language::Basic::Boolean);
+}
 
 =pod
 
