@@ -43,6 +43,9 @@ digests it (a ref is passed so that the next statement knows where to start
 parsing, e.g., in an IF/THEN), and sets various fields in the object.
 The implement routine uses the fields to implement the BASIC command.
 
+There's also an output_perl method, which returns a string (with
+; but not \n at the end) of the Perl equivalent of the BASIC statement.
+
 =cut
 
 use strict;
@@ -134,6 +137,10 @@ sub implement {
     return shift->{"next_statement"};
 }
 
+# By default, output an empty statement. Note that you need the semicolon,
+# because we write a line label for each line.
+sub output_perl {return ";";}
+
 # Concatenate tokens until you get to a splitting char.
 # Input: LB::Statement object, and "regexp" ("=" or "[,;]" to split on.
 # Output: Two strings. First is the catted tokens until the matching string,
@@ -189,6 +196,8 @@ sub parse {
 } # end sub Language::Basic::Statement::Data::parse
 
 # no sub implement nec.
+# no sub output_perl nec.
+
 } # end package Language::Basic::Statement::Data
 
 ######################################################################
@@ -220,6 +229,36 @@ sub parse {
 } # end sub Language::Basic::Statement::Def::parse
 
 # No sub implement: definition happens at compile time
+
+sub output_perl {
+    my $self = shift;
+    # LB::Expression::Function object
+    my $func_exp = $self->{"function"};
+    # LB::Function::Defined object
+    my $func = $func_exp->{"function"};
+
+    # Function name
+    my $name = $func->output_perl;
+    # TODO put this declaration at the end of the program. Note that if
+    # we do that, we still have to write a semicolon here, because of the
+    # statement label
+    my $desc = "{\n";
+
+    # Function args
+    $desc .= "my (";
+    my @args = map {$_->output_perl} @{$func->{"arguments"}};
+    $desc .= join (", ", @args);
+    $desc .= ") = \@_;\n";
+
+    # Function def
+    my $exp = $func->{"expression"}->output_perl;
+    $desc .= "return " . $exp . ";\n}";
+    # Tell program to print it out at the end of the perl script
+    &Language::Basic::Program::need_sub($name, $desc);
+
+    return (";"); # put empty statement in program here
+} # end sub Language::Basic::Statement::Def::output_perl
+
 } # end package Language::Basic::Statement::Def
 
 ######################################################################
@@ -253,6 +292,8 @@ sub implement {
     return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Dim::implement
 
+# no sub output_perl necessary
+
 } # end package Language::Basic::Statement::Dim
 
 ######################################################################
@@ -268,6 +309,10 @@ sub implement {
     &Language::Basic::Program::set_next_line(undef);
     return 0; # don't do any more statements, either
 } # end sub Language::Basic::Statement::End::implement
+
+sub output_perl {
+    return ("exit;");
+} # end sub Language::Basic::Statement::End::output_perl
 
 } # end package Language::Basic::Statement::End
 
@@ -337,6 +382,36 @@ sub implement {
     return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::For::implement
 
+# Outputs $var = start; and the beginning of a do {}
+# We also have to set the step here, because we need to test in the loop
+# whether it's positive or negative so we can know whether to test for
+# being greater than or less than the limit!
+sub output_perl {
+    my $self = shift;
+    # print var = start
+    my $lvalue = $self->{"lvalue"}->output_perl;
+    my $exp = $self->{"start"}->output_perl;
+    my $ret = join(" ", $lvalue, "=", $exp);
+    $ret .= ";\n";
+
+    # set the step
+    my $step = $self->{"step"}->output_perl;
+    $lvalue =~ /\w+/;
+    my $vname = $&;
+    $ret .= join(" ", "\$step_for_$vname =", $step);
+    $ret .= ";\n";
+
+    # set the limit
+    my $limit = $self->{"limit"}->output_perl;
+    $ret .= join(" ", "\$limit_for_$vname =", $limit);
+    $ret .= ";\n";
+
+    # Now start the do loop
+    $ret .= "do {";
+    $ret .= "\nINDENT";
+    return $ret;
+} # end sub Language::Basic::Statement::For::output_perl
+
 } # end package Language::Basic::Statement::For
 
 ######################################################################
@@ -368,6 +443,35 @@ sub implement {
     return 0; # no more statements on this line, since we GOTO'ed a new line
 } # end sub Language::Basic::Statement::Gosub::implement
 
+sub output_perl {
+    # Perl script should print a label after the gosub. But before that,
+    # it pushes the label name onto the global gosub stack. THen when
+    # we hit the RETURN, we can pop the stack & goto back to this lable.
+    my $self = shift;
+    my $exp = $self->{"expression"};
+    my $goto = $exp->output_perl;
+    my $ret = "";
+
+    # Form the label name to return to
+    my $label = "AL" . &Language::Basic::Program::line_number;
+    $ret .= "push \@Gosub_Stack, \"$label\";\n";
+
+    # Form the label name to goto
+    # if it's just a number , don't use $tmp
+    if ($goto =~ /^\d+$/) {
+        $ret .= "goto L$goto;";
+    } else {
+	# Form the label name
+	$ret .= "\$Gosub_tmp = 'L' . " . $goto . ";\n";
+	# Go to it
+	$ret .= "goto \$Gosub_tmp;";
+    }
+
+    # Write the return-to label after the goto
+    $ret .= "\n$label:;";
+
+    return ($ret);
+} # end sub Language::Basic::Statement::Gosub::output_perl
 } # end package Language::Basic::Statement::Gosub
 
 ######################################################################
@@ -397,6 +501,23 @@ sub implement {
     return 0; # no more statements on this line, since we GOTO'ed a new line
 } # end sub Language::Basic::Statement::Goto::implement
 
+sub output_perl {
+    my $self = shift;
+    # if it's just a number , don't use $tmp
+    my $exp = $self->{"expression"};
+    my $goto = $exp->output_perl;
+    my $ret;
+    if ($goto =~ /^\d+$/) {
+        $ret = "goto L$goto;";
+    } else {
+	# Form the label name
+	$ret = "\$Goto_tmp = 'L' . " . $goto . ";\n";
+	# Go to it
+	$ret .= "goto \$Goto_tmp;";
+    }
+
+    return ($ret);
+} # end sub Language::Basic::Statement::Goto::output_perl
 } # end package Language::Basic::Statement::Goto
 
 ######################################################################
@@ -462,6 +583,25 @@ sub implement {
     }
 } # end sub Language::Basic::Statement::If::implement
 
+sub output_perl {
+    my $self = shift;
+    my $ret = "if (";
+    $ret .= $self->{"condition"}->output_perl;
+    $ret .= ") {\n";
+    $ret .= "INDENT\n";
+    $ret .= $self->{"then_s"}->output_perl;
+    if ($self->{"else_s"}) {
+	$ret .= "\nUNINDENT";
+        $ret .= "\n} else {\n";
+	$ret .= "INDENT\n";
+	$ret .= $self->{"else_s"}->output_perl;
+    }
+    $ret .= "\nUNINDENT";
+    $ret .= "\n}";
+
+    return ($ret);
+} # end sub Language::Basic::Statement::If::output_perl
+
 } # end package Language::Basic::Statement::If
 
 ######################################################################
@@ -526,6 +666,34 @@ sub implement {
     return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Input::implement
 
+sub output_perl {
+    my $self = shift;
+    # Print the prompt
+    my $ret = "print ";
+    if (exists $self->{"to_print"}) {
+        $ret .= $self->{"to_print"}->output_perl;
+	$ret .= " . "; # concat with the ? below
+    }
+    $ret .= "\"? \";\n";
+
+    # Input the line
+    $ret .= "\$input_tmp = <>;\n";
+    $ret .= "chomp(\$input_tmp);\n";
+
+    # Set the values
+    my @lvalues = map {$_->output_perl} @{$self->{"lvalues"}};
+    my $tmp = join(", ", @lvalues);
+    # Make the code a bit simpler for just one input
+    my $multi = @lvalues > 1;
+    if ($multi) {
+	$ret .="($tmp) = split(/\\s*,\\s*/, \$input_tmp);";
+    } else {
+	$ret .="$tmp = \$input_tmp;";
+    }
+
+    return $ret;
+} # end sub Language::Basic::Statement::Input::output_perl
+
 } # end package Language::Basic::Statement::Input
 
 ######################################################################
@@ -561,6 +729,16 @@ sub implement {
 
     return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Let::implement
+
+sub output_perl {
+    my $self = shift;
+    my $lvalue = $self->{"lvalue"}->output_perl;
+    my $exp = $self->{"expression"}->output_perl;
+    my $ret = join(" ", $lvalue, "=", $exp);
+    $ret .= ";";
+
+    return ($ret);
+} # end sub Language::Basic::Statement::Let::output_perl
 
 } # end package Language::Basic::Statement::Let
 
@@ -614,6 +792,28 @@ sub implement {
     }
 } # end sub Language::Basic::Statement::Next::implement
 
+# Outputs $var increment and end of do{}until block
+sub output_perl {
+    my $self = shift;
+    # Increment variable
+    my $lvalue = $self->{"lvalue"};
+    my $lv = $lvalue->output_perl;
+    $lv =~ /\w+/;
+    my $vname = $&;
+    # Note that we add step_for even if it's negative.
+    my $ret = join(" ", $lv, "+=", "\$step_for_$vname");
+    $ret .= ";\n";
+    $ret .= "UNINDENT\n";
+
+    # End the do {} block
+    $ret .= "} ";
+
+    # test the until
+    $ret .= "until (\$step_for_$vname > 0 ? ";
+    $ret .= $lv . " > \$limit_for_$vname : " .$lv. " < \$limit_for_$vname);";
+    return $ret;
+} # end sub Language::Basic::Statement::Next::output_perl
+
 } # end package Language::Basic::Statement::Next
 
 ######################################################################
@@ -660,6 +860,42 @@ sub implement {
     return 0; # no more statements on this line, since we GOTO'ed a new line
 } # end sub Language::Basic::Statement::On::implement
 
+sub output_perl {
+    my $self = shift;
+    my $type = $self->{"type"};
+
+    # List of lines to go to
+    my @gotos = map {$_->output_perl} @{$self->{"gotos"}};
+    my $ret = "\@Gotos_tmp = map {'L' . ";
+    # If there's any expressions, be more fancy
+    if (grep {$_ !~ /^\d+$/} @gotos) {$ret .= "eval "}
+    $ret .= "\$_} (";
+    $ret .= join(", ", @gotos);
+    $ret .= ");\n";
+
+    # Index in the list
+    my $branch = $self->{"expression"}->output_perl;
+    $ret .= "\$index_tmp = ";
+    $ret .= $branch . ";\n";
+
+    # Form the label name to return to
+    my $label;
+    if ($type eq "GOSUB") {
+	$label = "AL" . &Language::Basic::Program::line_number;
+	$ret .= "push \@Gosub_Stack, \"$label\";\n";
+    }
+
+    # Go to it
+    $ret .= "goto \$Gotos_tmp[\$index_tmp-1];";
+
+    # Write the return-to label after the goto
+    if ($type eq "GOSUB") {
+	$ret .= "\n$label:;";
+    }
+
+    return ($ret);
+} # end sub Language::Basic::Statement::On::output_perl
+
 } # end package Language::Basic::Statement::On
 
 ######################################################################
@@ -670,7 +906,7 @@ package Language::Basic::Statement::Print;
 @Language::Basic::Statement::Print::ISA = qw(Language::Basic::Statement);
 use Language::Basic::Common;
 
-my $Column; # column on the screen we are about to print to
+my $Column = 0; # column on the screen we are about to print to
 
 sub parse {
     my $self = shift;
@@ -698,8 +934,19 @@ sub implement {
     foreach my $thing (@{$self->{"to_print"}}) {
 	my ($exp, $endchar) = @$thing;
 	my $string = $exp->evaluate;
+
+	# Never print after column 70
+	# But "print ''" shouldn't print two \n's!
+	if ($Column >= 70 && length($string)) {
+	    print "\n";
+	    $Column = 0;
+	}
+
+	# Print the string
 	print $string;
 	$Column += length($string);
+
+	# Handle the thing after the string
 	if ($endchar eq ",") {
 	    # Paraphrased from a BASIC manual:
 	    # If the printhead (!) is at char 56 or more after the expression,
@@ -728,6 +975,36 @@ sub implement {
 
     return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Print::implement
+
+sub output_perl {
+    my $self = shift;
+    my $ret = "print(";
+    my @to_print = @{$self->{"to_print"}};
+    # TODO create a Print subroutine that takes exp/endchar array & prints
+    # in the exact way BASIC does. (How do we make that subroutine print
+    # a space after numerical expressions?!)
+    while (my $thing = shift @to_print) {
+	my ($exp, $endchar) = @$thing;
+	my $string = $exp->output_perl;
+	$ret .= $string;
+	$ret .= ",' '" if ref($exp) =~ /Numeric$/;
+	if ($endchar eq ",") {
+	    $ret .= ", \"\\t\"";
+	} elsif ($endchar eq "") {
+	    $ret .= ", \"\\n\"";
+	    # This had better be the last exp!
+	    warn "Internal error: obj. w/out endchar isn't last!" if @to_print;
+	} # otherwise it's ';', we hope
+
+	if (@to_print) {
+	    $ret .= ", ";
+	} else {
+	    $ret .= ");";
+	}
+    }
+
+    return ($ret);
+} # end sub Language::Basic::Statement::Print::output_perl
 
 } # end package Language::Basic::Statement::Print
 
@@ -763,6 +1040,21 @@ sub implement {
     return $self->{"next_statement"};
 } # end sub Language::Basic::Statement::Read::implement
 
+sub output_perl {
+    my $self = shift;
+    # Set a list...
+    my $ret = "(";
+    my @lvalues = map {$_->output_perl} @{$self->{"lvalues"}};
+    $ret .= join(", ", @lvalues);
+    $ret .= ") = ";
+
+    # equal to a splice from @Data
+    my $num = @lvalues;
+    $ret .= "splice(\@Data, 0, $num);";
+
+    return ($ret);
+} # end sub Language::Basic::Statement::Read::output_perl
+
 } # end package Language::Basic::Statement::Read
 
 ######################################################################
@@ -771,6 +1063,22 @@ sub implement {
 {
 package Language::Basic::Statement::Rem;
 @Language::Basic::Statement::Rem::ISA = qw(Language::Basic::Statement);
+sub parse {
+    my $self = shift;
+    my $tokref = $self->{"tokens"};
+    # TODO kind of bogus that the spacing won't reflect the original
+    my $rest = join(" ", @$tokref);
+    $self->{"comment"} = $rest;
+} # end sub Language::Basic::Statement::Rem::parse
+
+sub output_perl {
+    my $self = shift;
+    # Need to have a semicolon because the line label requires a
+    # statement after it. (And we need a line label in case we GOTO this line
+    my $ret = "; # " . $self->{"comment"};
+    return $ret;
+} # end sub Language::Basic::Statement::Rem::output_perl
+
 } # end package Language::Basic::Statement::Rem
 
 ######################################################################
@@ -791,6 +1099,13 @@ sub implement {
 
     return 0; # no more statements on this line, since we GOTO'ed a new line
 } # end sub Language::Basic::Statement::Return::implement
+
+sub output_perl {
+    my $ret = "\$Return_tmp = pop \@Gosub_Stack;\n";
+    $ret .= "goto \$Return_tmp;";
+
+    return ($ret);
+} # end sub Language::Basic::Statement::Return::output_perl
 
 } # end package Language::Basic::Statement::Return
 

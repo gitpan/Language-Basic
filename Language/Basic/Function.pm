@@ -40,7 +40,9 @@ my %Table;
 sub new {
     my ($class, $name) = @_;
 
-    my $self = {} ;
+    my $self = {
+        "name" => $name,
+    } ;
 
     # Put this sub in lookup table
     $Table{$name} = $self;
@@ -105,16 +107,27 @@ use Language::Basic::Common;
 # Called at the beginning of the program to set the intrinsic functions up.
 sub initialize {
     # Each value in the array is an arrayref.
-    # Each arrayref has: name, string, subref.
-    # The string is an N or S for each Numeric or String argument the
+    # Each arrayref has: name, type, subref, funcstring.
+    # The type is an N or S for each Numeric or String argument the
     # function takes.
+    # subref ref's a sub that does the perl equivalent of the basic function.
+    # funcstring is a string that gives the perl equivalent to the
+    # basic function. (Used for output_perl) If it's just a word, then perl
+    # and basic have exactly equivalent functions, which  makes the function
+    # call much easier. Otherwise, it's something in {} that will become
+    # a sub.
+    # TODO it would be pretty sexy to have the subref and the funcstring
+    # do the same thing (i.e., create the sub with an eval of funcstring).
+    # Only reason so far I can think of not to is Exit_Error call in CHR$.
+    # But I could create an Exit_Error routine in output perl script!
     my @Init = (
 	# Numeric functions...
-	["ASC", "S", sub {ord(shift)} ],
-	["INT", "N", sub {int(shift)} ],
-	["LEN", "S", sub {length(shift)} ],
-	["RND", "N", sub {rand()} ],
-	["VAL", "S", sub {my $a=shift; return ($a =~ /[\d+-.]/ ? $a : 0)} ],
+	["ASC", "S", sub {ord(shift)}, "ord" ],
+	["INT", "N", sub {int(shift)}, "int" ],
+	["LEN", "S", sub {length(shift)}, "length" ],
+	# Don't use the arg. BASIC passes in
+	["RND", "N", sub {rand()}, "{rand()}" ],
+	["VAL", "S", sub {0+shift;}, "{0+shift;}"],
 
 	# and String functions...
 	['CHR$', "N", 
@@ -122,22 +135,22 @@ sub initialize {
 	        my $a=shift; 
 		if ($a>127 || $a<0) {Exit_Error("Arg. to CHR\$ must be < 127")}
 		chr($a);
-	    } ],
+	    }, "chr" ],
 	['MID$', "SN;N", 
 	    sub {
-	        my ($str, $index, $length) = @_;
-		$index--; # BASIC strings index from 1!
-		return (defined $length ?
-		    substr($str, $index, $length) :
-		    substr($str, $index) );
-	    } ],
+                my ($str, $index, $length) = @_;
+                $index--; # BASIC strings index from 1!
+                return (defined $length ?
+                    substr($str, $index, $length) :
+                    substr($str, $index) );
+	    }, '{my ($str, $index, $length) = @_; $index--; return (defined $length ? substr($str, $index, $length) : substr($str, $index) );}' ],
     );
 
     # Initialize intrinsic functions
     foreach (@Init) {
-	my ($name, $arg_types, $subref) = @$_;
+	my ($name, $arg_types, $subref, $perl_sub) = @$_;
 	my $func = new Language::Basic::Function::Intrinsic ($name);
-	$func->define($arg_types, $subref);
+	$func->define($arg_types, $subref, $perl_sub);
     }
 } # end sub Language::Basic::Function::Intrinsic::initialize
 
@@ -146,9 +159,11 @@ sub define {
     # $subref is a sub ref which "translates" the BASIC function into Perl
     # arg_types is a string containing an N or S for each Numeric or String
     # argument the function takes
-    my ($self, $arg_types, $subref) = @_;
+    # perlsub is a string which is the perl equivalent of the basic function
+    my ($self, $arg_types, $subref, $perl_sub) = @_;
     $self->{"subroutine"} = $subref;
     $self->{"arg_types"} = $arg_types;
+    $self->{"perl_sub"} = $perl_sub;
 } # end sub Language::Basic::Function::Intrinsic::define
 
 sub evaluate {
@@ -157,6 +172,31 @@ sub evaluate {
     # Put this in an eval to find errors?
     return &{$self->{"subroutine"}} (@args);
 } # end sub Language::Basic::Function::Intrinsic::evaluate
+
+# output the function name
+sub output_perl {
+    my $self = shift;
+
+    # If it's a basic function that translates to an intrinsic function,
+    # just return the function
+    my $perl_sub = $self->{"perl_sub"};
+    return $perl_sub unless $perl_sub =~ /^\{/;
+
+    # Otherwise, it's more complicated
+    my $name = $self->{"name"};
+    # Use ucfirst(lc) for intrinsic functions so we don't get 
+    # messed up with real intrinsic functions
+    $name = ucfirst(lc($name));
+    $name =~ s/\$$/_str/;
+    # It's a BASIC intrinsic function w/ a perl equivalent
+    $name .= "_bas";
+
+    # Note that we're going to have to add sub description at the
+    # end of the perl script
+    &Language::Basic::Program::need_sub($name, $perl_sub);
+
+    return $name;
+} # end sub Language::Basic::Function::Intrinsic::output_perl
 
 package Language::Basic::Function::Intrinsic::String;
 @Language::Basic::Function::Intrinsic::String::ISA = qw(Language::Basic::Function::Intrinsic);
@@ -180,7 +220,7 @@ use Language::Basic::Common;
 
 # This sub defines a function, i.e. says what it does with its arguments
 sub define {
-    # $arglist is a ref to a list of LB::Variable::Scalars, which are the
+    # $arglist is a ref to a list of LB::Variable::Lvalues, which are the
     # arguments to the Function. (E.g., X in DEF FN(X))
     # $exp is an LB::Expression which, when evaluated on the arguments,
     # will implement the function
@@ -193,14 +233,14 @@ sub define {
     }
     $self->{"arg_types"} = $types;
 
-    $self->{"variables"} = $arglistref;
+    $self->{"arguments"} = $arglistref;
     $self->{"expression"} = $exp;
 } # end sub Language::Basic::Function::Defined::define
 
 # Actually evaluate the function on its arguments
 # Set each parameter (in "variables" field) to the value given in the
 # arguments, then evaluate the expression.
-# Just in case user has a function FN(X) and uses X elsehwere in the
+# Just in case user has a function FN(X) and uses X elsewhere in the
 # program, save the value of X just before we set X based on the argument.
 # This is a poor man's version of variable scoping.
 sub evaluate {
@@ -208,22 +248,36 @@ sub evaluate {
     my ($self, @args) = @_;
 
     my @save_vars;
-    foreach my $var (@{$self->{"variables"}}) {
+    foreach (@{$self->{"arguments"}}) {
+	my $var = $_->variable;
         my $arg = shift @args;
 	push @save_vars, $var->value;
+	$var->set($arg);
     }
 
     my $value = $self->{"expression"}->evaluate;
 
     # Now restore the values of the function parameters that we may have
     # changed.
-    foreach my $var (@{$self->{"variables"}}) {
+    foreach (@{$self->{"arguments"}}) {
+	my $var = $_->variable;
         my $save = shift @save_vars;
 	$var->set($save);
     }
 
     return $value;
-} # end sub Language::Basic::Function::Intrinsic::evaluate
+} # end sub Language::Basic::Function::Defined::evaluate
+
+# output the function name
+sub output_perl {
+    my $self = shift;
+    my $name = $self->{"name"};
+    $name = lc($name);
+    # First "string", then "function"
+    $name =~ s/\$$/_str/;
+    $name =~ s/^fn(.*)/$1_fun/;
+    return $name;
+} # end sub Language::Basic::Function::Defined::output_perl
 
 package Language::Basic::Function::Defined::String;
 @Language::Basic::Function::Defined::String::ISA = qw(Language::Basic::Function::Defined);

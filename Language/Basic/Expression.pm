@@ -117,12 +117,29 @@ sub evaluate {
 	my $add2 = (shift @exps)->evaluate;
 	if ($op eq '+') {
 	    $add .= $add2;
-	} else { # minus
+	} else {
 	    die "Unknown op in LBE::Arithmetic::String::evaluate!\n";
 	}
     } # end while
     return($add);
-} # end sub Language::Basic::Expression::Arithmetic::evaluate
+} # end sub Language::Basic::Expression::Arithmetic::String::evaluate
+
+sub output_perl {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+    my @ops = @{$self->{"operations"}};
+
+    my $ret = (shift @exps)->output_perl;
+    while (my $op = shift @ops) {
+	if ($op eq "+") {
+	    my $exp = (shift @exps)->output_perl;
+	    $ret .= " . " . $exp;
+	} else {
+	    die "Unknown op in LBE::Arithmetic::String::output_perl!\n";
+	}
+    } # end while
+    return($ret);
+} # end sub Language::Basic::Expression::Arithmetic::String::output_perl
 
 package Language::Basic::Expression::Arithmetic::Numeric;
 @Language::Basic::Expression::Arithmetic::Numeric::ISA = qw(Language::Basic::Expression::Arithmetic);
@@ -143,7 +160,20 @@ sub evaluate {
 	}
     } # end while
     return($add);
-} # end sub Language::Basic::Expression::Arithmetic::evaluate
+} # end sub Language::Basic::Expression::Arithmetic::Numeric::evaluate
+
+sub output_perl {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+    my @ops = @{$self->{"operations"}};
+
+    my $ret = (shift @exps)->output_perl;
+    while (my $op = shift @ops) {
+	my $exp = (shift @exps)->output_perl;
+	$ret .= $op . $exp;
+    } # end while
+    return($ret);
+} # end sub Language::Basic::Expression::Arithmetic::Numeric::output_perl
 
 } # end package Language::Basic::Expression::Arithmetic
 
@@ -192,6 +222,19 @@ sub evaluate {
     } # end while
     return($mult);
 } # end sub Language::Basic::Expression::Multiplicative::evaluate
+
+sub output_perl {
+    my $self = shift;
+    my @exps = @{$self->{"expressions"}};
+    my @ops = @{$self->{"operations"}};
+
+    my $ret = (shift @exps)->output_perl;
+    while (my $op = shift @ops) {
+	my $exp = (shift @exps)->output_perl;
+	$ret .= $op . $exp;
+    } # end while
+    return($ret);
+} # end sub Language::Basic::Expression::Multiplicative::output_perl
 
 # Sub packages
 package Language::Basic::Expression::Multiplicative::Numeric;
@@ -264,6 +307,18 @@ sub evaluate {
     return($value);
 } # end sub Language::Basic::Expression::Unary::evaluate
 
+sub output_perl {
+    my $self = shift;
+    my $ret = $self->{"minus"} ?  "-" : "";
+    my $exp = $self->{"expression"};
+    my $out = $exp->output_perl;
+    if ($exp->isa("Language::Basic::Expression::Arithmetic")) {
+        $out = "(" . $out . ")";
+    }
+    $ret .= $out;
+    return($ret);
+} # end sub Language::Basic::Expression::Unary::output_perl
+
 # Sub packages
 package Language::Basic::Expression::Unary::Numeric;
 @Language::Basic::Expression::Unary::Numeric::ISA = qw(Language::Basic::Expression::Unary);
@@ -320,6 +375,8 @@ sub parse {
 
 sub evaluate { return shift->{"value"} }
 
+sub output_perl {return shift->{"value"}}
+
 package Language::Basic::Expression::Constant::String;
 @Language::Basic::Expression::Constant::String::ISA = qw(Language::Basic::Expression::Constant);
 
@@ -338,6 +395,16 @@ sub parse {
 } # end sub Language::Basic::Expression::Constant::String::parse
 
 sub evaluate { return shift->{"value"} }
+
+# Don't return in single quotes, because single quotes may be in a BASIC
+# string constant. Instead use quotemeta. But don't really use quotemeta,
+# because it quotes too much.
+sub output_perl {
+    my $self = shift;
+    my $str = $self->{"value"};
+    $str =~ s/([\$%@*&])/\\$1/g; # poor man's quotemeta
+    return '"' . $str . '"';
+} # end sub Language::Basic::Expression::Constant::String::output_perl
 
 } # end package Language::Basic::Expression::Constant
 
@@ -381,6 +448,7 @@ sub parse {
     # (Also, create the Variable if it doesn't yet exist.)
     my $var = &Language::Basic::Variable::lookup($name, $self->{"arglist"});
     $self->{"varptr"} = $var;
+    $self->{"name"} = $name;
 
     # Is it a string or numeric lvalue?
     $self->string_or_numeric($var);
@@ -409,6 +477,18 @@ sub variable {
 
     return $var;
 } # end sub Language::Basic::Expression::Lvalue::variable
+
+sub output_perl {
+    my $self = shift;
+    my $name = $self->{"name"};
+    $name =~ s/\$$/_str/; # make name perl-like
+    my $ret = '$' . lc($name);
+    if (defined $self->{"arglist"}) {
+	my $args = join("][", ($self->{"arglist"}->output_perl));
+	$ret .= "[" . $args . "]";
+    }
+    return $ret;
+} # end sub Language::Basic::Expression::Lvalue::output_perl
 
 } # end package Language::Basic::Expression::Lvalue
 
@@ -465,16 +545,16 @@ sub parse {
 	$$textref =~ s/\((.+)\)// or 
 	    Exit_Error("Function must take at least one argument.");
 	my $argtext = $1;
-	my @vars;
+	my @args;
 	do {
 	    my $arg = new Language::Basic::Expression::Lvalue \$argtext;
 	    # TODO test that arg is a Scalar!
-	    push @vars, $arg->variable;
+	    push @args, $arg;
 	} while $argtext =~ s/^,//;
 
         # Define the number & type of args in the subroutine, as well as the
 	# expression that defines the function.
-	$func->define (\@vars, $exp);
+	$func->define (\@args, $exp);
 
     } else {
 	my $arglist = new Language::Basic::Expression::Arglist $textref
@@ -498,6 +578,24 @@ sub evaluate {
     my $value = $func->evaluate(@args);
     return $value;
 } # end sub Language::Basic::Expression::Function::evaluate
+
+sub output_perl {
+    my $self = shift;
+    # Function name
+    my $func = $self->{"function"};
+    my $ret = $func->output_perl;
+    # If it's either a user-defined function or a BASIC intrinsic (that
+    # doesn't have a Perl equivalent), add a &
+    if ($ret =~ /(fun|bas)$/) {$ret = '&' . $ret}
+
+    # Function args
+    $ret .= "(";
+    
+    my @args = $self->{"arglist"}->output_perl;
+    $ret .= join(", ", @args);
+    $ret .= ")";
+    return $ret;
+}
 
 } # end package Language::Basic::Expression::Function
 
@@ -534,6 +632,12 @@ sub evaluate {
     return @values;
 } # end sub Language::Basic::Expression::Arglist::evaluate
 
+# Note this returns an ARRAY of args. Messes up the output_perl paradigm,but
+# functions & arrays need to do different things to the args.
+sub output_perl {
+    my $self = shift;
+    return map {$_->output_perl} @{$self->{"arguments"}};
+} # end sub Language::Basic::Expression::Arglist::output_perl
 } # end package Language::Basic::Expression::Arglist
 
 ######################################################################
@@ -601,6 +705,19 @@ sub evaluate {
     
     return $value;
 } # end sub Language::Basic::Expression::Conditional::evaluate
+
+sub output_perl {
+    my $self = shift;
+    my $exp1 = $self->{"exp1"};
+    my $exp2 = $self->{"exp2"};
+    my $e1 = $exp1->output_perl;
+    my $e2 = $exp2->output_perl;
+
+    my $perlop = $self->{"op"};
+    my $ret = join(" ",$e1, $perlop, $e2);
+
+    return($ret);
+} # end sub Language::Basic::Expression::Conditional::output_perl
 
 # Sub packages
 package Language::Basic::Expression::Conditional::Numeric;

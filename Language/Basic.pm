@@ -36,12 +36,12 @@ use IO::File;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK);
 
 require Exporter;
-@ISA = qw(Exporter AutoLoader);
+@ISA = qw(Exporter);
 @EXPORT = qw(
 );
 
 # Stolen from `man perlmod`
-$VERSION = do { my @r = (q$Revision: 1.27 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.32 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 # Sub-packages
 use Language::Basic::Common;
@@ -86,6 +86,11 @@ my ($Next_Counter, $Counter);
 my @Stack;
 # The data holder (stuff from DATA statements, read by READ statements)
 my @Data;
+# Functions whose perl-equivalent subs we need to print out at the end
+# of the program
+my %Needed_Subs;
+# Indenting for outputted Perl
+my $Output_Indent = 2; # eight spaces by default
 
 sub new {
     my ($class, $infile) = @_;
@@ -267,6 +272,74 @@ sub set_after_next_line {
     $Next_Counter++;
 }
 
+sub output_perl {
+# This function takes lines of the program and outputs each as perl
+    my $self = shift;
+    my $sep = '#' x 78;
+    $Counter = 0;
+
+    # Beginning of the program
+    print '#!/usr/bin/perl -w';
+    print "\n#Translated from BASIC by basic2pl\n\n";
+
+    if (@Data) {
+	print "$sep\n# Setup\n#\n";
+	print "# Read data\n";
+        print "while (<DATA>) {chomp; push \@Data, \$_}\n\n";
+    }
+
+    # Loop through the lines in the program
+    print "$sep\n# Main program\n#\n";
+    while ($Counter <= $#Line_Numbers) {
+	my $line_num = $Line_Numbers[$Counter];
+        my $line = $self->{"lines"}->{$line_num};
+	my $label = "L$Line_Numbers[$Counter]:";
+	my $spaces_per_indent = 4;
+	my $out = $label . $line->output_perl;
+	# Print labels all the way against the left edge of the line,
+	# then indent the rest of the line.
+	# Split with -1 so final \n's don't get ignored
+	foreach (split (/\n/, $out, -1)) {
+	    # Change indenting for next time?
+	    $Output_Indent += 1, next if $_ eq "INDENT";
+	    $Output_Indent -= 1, next if $_ eq "UNINDENT";
+	    warn "weird indenting $Output_Indent\n" if $Output_Indent < 2;
+
+	    # If we didn't hit an indent-changing command, print the
+	    # label (if any) and the actual string
+	    $label = (s/^A?L\d+:// ? $& : "");
+	    # minus for left justify
+	    my $indent = -$Output_Indent * $spaces_per_indent; 
+	    printf("%*s", $indent, $label);
+
+	    # print the actual string
+	    print $_;
+	    print "\n"; # the \n we lost from split, or the last \n
+	}
+	$Counter++;
+    }
+
+    print "\n$sep\n# Subroutine Definitions\n#\n" if %Needed_Subs;
+    # Print out required subroutines
+    foreach (sort keys %Needed_Subs) {
+        print (join(" ", "sub", $_, $Needed_Subs{$_}));
+	print " # end sub $_\n\n";
+    }
+
+    # If there were any DATA statements...
+    if (@Data) {
+        print "\n\n$sep\n# Data\n#\n__DATA__\n";
+	print join("\n", map {$_->output_perl} @Data);
+	print "\n";
+    }
+} # end sub Language::Basic::Program::output_perl
+
+sub need_sub {
+    my ($func_name, $func_desc) = @_;
+    return if exists $Needed_Subs{$func_name};
+    $Needed_Subs{$func_name} = $func_desc;
+}
+
 } # end package Language::Basic::Program
 
 ######################################################################
@@ -344,6 +417,16 @@ sub implement {
 	$Curr_Statement = $Curr_Statement->implement;
     }
 } # end sub Language::Basic::Line::implement
+
+sub output_perl {
+    my $self = shift;
+    my $statement = $self->{"first_statement"};
+    # TODO loop over statements in the line?
+
+    # Output the statement
+    my $out = $statement->output_perl;
+    return $out;
+} # end sub Language::Basic::Line::output_perl
 
 } # end package Language::Basic::Line
 

@@ -1,5 +1,14 @@
 Revision history for Perl extension Language::Basic.
 
+ 1.32  2000/05/29 22:48:03
+	- BUG: User defined functions weren't actually using the
+	  arguments being passed to them
+	- Translate BASIC to Perl!
+
+ 1.27  2000/05/24 19:20:55
+	- Lines not in numerical order in the BASIC program are a fatal error
+        - BUG: GOTO to the first line of the program would end execution.
+
  1.26  2000/05/23 14:18:50
 	- ALPHA RELEASE!
 	- More pod

@@ -25,6 +25,41 @@ have non-quoted strings. Could we use nexttok with that too?
     Far in the future, we could even have a cat_until_eos, which looks for
 either : or \n.
 
+Can we make all expressions either string, numeric, or logical? Note that
+arithmetic exps need to be string or numeric, since + is handled differently.
+And mult. needs to be s or n so that arith. can inherit its datatype from it.
+Unary, too.  But conditionals are really neither string nor numeric. They have
+string or numeric expressions *in* them (and e.g. both exps need to be the
+same type) but there's really no difference between a string & numeric exp.
+Which means we should be able to get rid of LBE::Conditional::String &
+::Numeric packages, which never need to be used!
+    We're actually going to need LogicalOr and LogicalAnd classes if we
+want to get precedence right. And change Conditional to Relational (not quite
+like C, which separates equality-expression from relational, because in BASIC
+<> and > have the same precedence (and you can't have more than one in a 
+relational expression anyway)). (NOT will be a field for Relationals 
+like the "minus" field for Unary's.)
+    But note that in that Unary expressions can actually be string,
+numeric, OR logical! 
+E.g., (x>2) or (y>1)
+(x>2) is a unary logical exp., which should be passed up the 
+mult. -> arith -> Relational
+chain, so that the LogicalOr object sees that indeed it's Or-ing relational
+exps rather than arithmetic ones.
+    PROBLEM: if we tell Unary that a paren begins an LBE::LogicalOr, then
+even an expression like (3+2) will be a LogicalOr. But it's a LogicalOr that's
+numeric! 
+    Options: (1) have LogicalOr->new return a regular arithmetic if
+that's what it reads, or (2) allow LogicalOrs to be numeric. 
+In the case of (1), we avoid having a gazillion expressions to evaluate just
+to do 2+2. In face, maybe I should do this anyway, including having an
+arithmetic exp. just be Unary + Unary if there aren't actually any mult.
+exp.s in it. For (2), that's actually doable. It just means that Relational
+exps CAN in fact be string, numeric or logical, not just automatically
+logical. (Basically, they'd be string/numeric if they have only one term; same
+for LogicalOr/And. And if a LogicalAnd has two terms but one is numeric,
+that's a BUG. ("x>2 AND 17")
+
 I REALLY need more comments! E.g., consolidate (in Foo::new) all possible
 fields for that object's hash.
 
@@ -35,6 +70,10 @@ set some new stuff?
 Case insensitivity in strings? 
 
 Ugly kludge in LB::Expression::Constant::parse. See TODO there.
+
+Test suite should run a bunch of BASIC programs (like in bwbasic). We could
+also translate each to perl & run it & make sure we get the same output,
+in order to test output_perl functionality.
 
 ----------------------------------------------------------------------
 Enhancements to BASIC:
@@ -54,9 +93,10 @@ string expressions.
 
 ----------------------------------------------------------------------
 BASIC things to implement for The Secret Project:
-Make sure we can handle a string with value '"'. (Just take ASC(A$)=34?
+- LINE INPUT command
+- Make sure we can handle a string with value '"'. (Just take ASC(A$)=34?
 or do we need to use \" or something? But then we need to quote \ too!)
-LOAD function of some sort?
+- LOAD function of some sort? Not *really* needed
 
 ----------------------------------------------------------------------
 BASIC things to implement for the betterment of mankind:
@@ -67,25 +107,59 @@ More functions: ABS, SQR, string functions, etc.
 GET, GET$
 RESTORE
 NEXT I,J
-float numbers (4.3e-3 et al.), integer & float variables
+float numbers (4.3e-3 et al.), integer variables
 correct handling of RND.
 
 ----------------------------------------------------------------------
-Things we need like a hole in the head:
+Things we need like a hole in the head (but implemented anyway):
 
 - output PERL E.g.:
-sub LB::Statement::If::output_perl {
-    my $self = shift;
-    $str = "IF " .
-	$self->{"expression"}->output_perl .
-	" THEN " .
-	$self->{"then"}->output_perl;
-    if ($self->{"else"}) { $str = "$str ELSE " . $self->{"else"}->output_perl}
-    return $str;
-}
+From Tom Phoenix:
+    But if a line isn't recognized, you could just throw it in to the Perl
+    source, marked with a special comment like "#??" at the start of the line.
+
+Since every line in BASIC is just one line, we could even handle
+unsupported commands. In fact, we could overload Exit_Error to output
+"#??$Original_Line" instead of exiting. (Note that this does require
+storing the original line!)
+
+There should be subs that act exactly like basic PRINT & INPUT, since the
+behavior is kind of complicated. Then just call those subs. (And write
+the subs into the program!) Except that that may be Hard. Can one write a sub
+that handles PRINT "3" differently from PRINT 3? Maybe. E.g., if you're
+printing a numeric variable or a number, then print a space. But the
+complicated part is expressions. How does this sub, which only gets the output
+of $foo->output_perl, know if the '3' that was returned is the string 3 or the
+number 3? I can't imagine how it does. Which means that numeric & string
+Constants can't be differentiated.
+
+Better AI to print nicer code.
+* Ugliest thing now may be do loops, which have convoluted code to allow for
+  upward or downward loops. Unfortunately, LBS::Next can't actually access the
+  information it needs in order to decide whether to test for > or <. I
+  *could* maybe change the way Next is stored. But it would be convoluted. We
+  could always use something like
+      $test_for = sub {$step_for_k < $limit_for_k}, 
+  and then at the end of the loop just test for &$test_for. But it's arguable
+  whether that's less convoluted.
+* Any way to definitely know when to add \n's to separate blocks of code? End
+  of a do block looks dumb when it's in a nested loop. Maybe I could
+  only leave whitespace if we're not indented? Same with ifs? (In that case,
+  testing has to be done in LBP::output_perl, which may be a dangerous (or
+  impossible, if it's calling all the statemeout outputters) place to do it.)
+* Put ifs on one line if there's no else & it's short? Note that I can test
+  length of the string representing the "then" statement (and whether it has
+  \n's in it).
+* Remove all labels but those that are goto'ed to?  Note that (a) this doesn't
+  work if there are any computed gotos/gosubs (but who really uses those?) It
+  requires keeping a list of the lines that are goto'd to during parsing, so
+  that we know which line numbers we need to output before we actually output
+  any lines.
+* my() variables. Or at least setting some to "" or 0? Otherwise we get
+Uninitialized value errors from perl -w.
 
 - output BASIC? In theory, that could be useful for debugging. Right now,
 we can't print out lines after we've parsed them.
 
 - An interpreter using Term::Readline where you could actually input stuff
-line by line, load new programs, run them, etc.
+line by line, load new programs, run them, etc. (David Glasser started this)

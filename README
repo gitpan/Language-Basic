@@ -1,6 +1,9 @@
 Language::Basic - A perl module implementation of the BASIC computer language
 
-The included basic.pl is a BASIC interpreter, which uses Language::Basic.
+The included basic.pl runs BASIC programs.
+
+The included basic2pl.pl translates BASIC programs into Perl. (It's not
+pretty, but it's not as bad as you might think, either.)
 
 Documentation is included as POD in the .pm files. There's also a syntax
 description in the file Syntax.
@@ -21,16 +24,19 @@ Installation should be as simple as
 
 Gregory Yob's classic BASIC adventure game, Hunt the Wumpus, is included for
 your playing pleasure. (The game was apparently written before they invented
-licenses. I hope he doesn't mind my distributing it.)
+licenses. I hope he doesn't mind my distributing it.) Translating it to Perl,
+and comparing it with the Perl Power Tools wump(6) port, are exercises left
+to the reader.
 
-I invite comments, criticisms, bug reports, bug fixes, and ideas. Also,
-if you've got any fun/interesting BASIC programs lying around that you'd
-like to send me.
+I invite comments, criticisms, bug reports, bug fixes, and ideas. Also, feel
+free to send along any fun/interesting BASIC programs you have lying around.
 
-Stay tuned. In addition to minor boring upgrades of supported BASIC syntax
-and functionality, (I need to decide how much time I want to waste on this
-completely useless project.) I hope soon to release the results of my secret
-project: Ye Eldritch Triangle of Interpretation!
+Stay tuned for more excitement. See the TODO file for planned changes.
+First, I plan to add some more BASIC functionality. Second, David Glasser
+is helping me make the module more robust, and he's sent a patch to make
+a real (Term::Readline) interpreter. Third and most exciting (and evil), I hope
+soon to release the results of my secret project: Ye Eldritch Triangle of
+Interpretation!
 
 
 Enjoy!
